@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Config (contains tokens)
+scripts/config.json
+
+# OS
+.DS_Store
+Thumbs.db
