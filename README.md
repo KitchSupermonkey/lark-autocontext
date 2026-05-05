@@ -2,7 +2,7 @@
 
 > **Powered by Lark CLI** | **跨Agent通用** | **Context Engineering**
 
-Context Wizard 是一个通用的业务上下文管理工具，通过纯 Python 脚本和 `lark-cli` 构建，不依赖任何特定 Agent 框架。它致力于解决 AI 时代的**"上下文质量"**瓶颈——让散落的信息变为结构化、可追溯、带时间线的业务知识。
+Context Wizard 是一个通用的业务上下文管理工具，通过纯 Python 脚本和 `lark-cli` 构建，不依赖任何特定 Agent 框架。它致力于解决 AI 时代的**上下文质量**瓶颈——让散落的信息变为结构化、可追溯、带时间线的业务知识。
 
 ---
 
