@@ -79,7 +79,7 @@ def get_or_create_table(app_token, project_name, table_name=None):
     import subprocess
     try:
         result = subprocess.run(
-            ["python", os.path.join(os.path.dirname(__file__), "create_dashboard.py"), app_token, table_name],
+            [sys.executable, os.path.join(os.path.dirname(__file__), "create_dashboard.py"), app_token, table_name],
             capture_output=True, text=True,
             encoding="utf-8", errors="replace", shell=(sys.platform == "win32")
         )

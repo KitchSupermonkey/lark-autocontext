@@ -88,6 +88,16 @@ python scripts/init_base.py
 
 如果你不想手动逐个提供文档，可以启用自动扫描。它会通过 `lark-cli drive +search --as user` 发现你有权限访问的飞书云文档，高置信候选会直接入库，中低置信候选会进入待确认队列。
 
+自动扫描需要用户身份和搜索权限：
+
+```bash
+lark-cli config init --new
+lark-cli auth login --recommend --no-wait
+lark-cli auth login --scope "search:docs:read" --no-wait
+```
+
+如果飞书提示应用正在等待 `search:docs:read` 审批，等管理员/飞书侧审批通过后再重试扫描。
+
 ```bash
 # 每日轻扫：处理最近变化
 python scripts/scan_drive.py --mode daily

@@ -128,7 +128,10 @@ Auto-scan uses `lark-cli drive +search --as user`, so user identity must be conf
 ```bash
 lark-cli config init --new
 lark-cli auth login --recommend --no-wait
+lark-cli auth login --scope "search:docs:read" --no-wait
 ```
+
+If Feishu says the app is pending approval for `search:docs:read`, wait for the Feishu app/admin approval and retry the scan after approval.
 
 State is stored in `.context_wizard/scan_state.jsonl`; historical backfill progress is stored in `.context_wizard/backfill_cursor.json`.
 
