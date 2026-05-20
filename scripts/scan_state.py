@@ -35,12 +35,11 @@ def stable_id(*parts: Any) -> str:
 
 
 def candidate_id(candidate: Dict[str, Any]) -> str:
-    return candidate.get("id") or stable_id(
-        candidate.get("doc_type"),
-        candidate.get("token"),
-        candidate.get("url"),
-        candidate.get("title"),
-    )
+    if candidate.get("id"):
+        return candidate["id"]
+    if candidate.get("token") or candidate.get("url"):
+        return stable_id(candidate.get("doc_type"), candidate.get("token"), candidate.get("url"))
+    return stable_id(candidate.get("doc_type"), candidate.get("title"))
 
 
 def append_event(record: Dict[str, Any], state_path: str = DEFAULT_STATE_PATH) -> Dict[str, Any]:

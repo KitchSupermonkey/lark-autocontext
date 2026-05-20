@@ -56,6 +56,8 @@ def extract_raw_content(candidate: Dict[str, Any]) -> Dict[str, Any]:
     source = source_for_candidate(candidate)
     if not source:
         raise ValueError("候选缺少 URL 或 token，无法读取")
+    if doc_type == "sheet" and "/sheet" not in source and "/sheets" not in source:
+        raise ValueError("Wiki 中的表格暂不自动读取，已转入待确认")
     result = run_script("extract_data.py", [source])
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "extract_data.py failed")
@@ -71,6 +73,8 @@ def extract_raw_content(candidate: Dict[str, Any]) -> Dict[str, Any]:
 def meaningful_excerpt(content: str, limit: int = 500) -> str:
     lines = []
     for line in content.splitlines():
+        line = re.sub(r"</?(title|callout|text|heading|paragraph|bullet|ordered)[^>]*>", " ", line)
+        line = re.sub(r"<[^>]+>", " ", line)
         clean = re.sub(r"\s+", " ", line).strip(" #|-")
         if len(clean) >= 8:
             lines.append(clean)
@@ -83,6 +87,10 @@ def meaningful_excerpt(content: str, limit: int = 500) -> str:
 def build_context_payload(candidate: Dict[str, Any], extracted: Dict[str, Any]) -> Dict[str, Any]:
     title = candidate.get("title") or "未命名文档"
     content = str(extracted.get("content") or "")
+    if title.startswith("http://") or title.startswith("https://"):
+        title_match = re.search(r"<title>(.*?)</title>", content, flags=re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title = re.sub(r"\s+", " ", title_match.group(1)).strip()
     source_link = candidate.get("url") or source_for_candidate(candidate)
     doc_token = extracted.get("doc_token") or candidate.get("token") or "N/A"
     return {
@@ -135,6 +143,13 @@ def ingest_one(candidate: Dict[str, Any], state_path: str = DEFAULT_STATE_PATH) 
             "table_id": table_id,
             "reason": "auto ingested",
             "last_error": "",
+        }, state_path=state_path)
+    except ValueError as exc:
+        return update_record(candidate, {
+            "status": "needs_review",
+            "attempt_count": attempt_count,
+            "reason": "needs manual review",
+            "last_error": str(exc),
         }, state_path=state_path)
     except Exception as exc:
         next_status = "needs_review" if attempt_count >= 3 else "failed"
@@ -206,8 +221,14 @@ def rescan_targets(targets: List[str], state_path: str = DEFAULT_STATE_PATH) -> 
     latest = latest_records(state_path)
     changed: List[str] = []
     for target in targets:
-        if target in latest:
-            record = latest[target]
+        matching_record = latest.get(target)
+        if not matching_record:
+            for record in latest.values():
+                if target in {record.get("url"), record.get("token")}:
+                    matching_record = record
+                    break
+        if matching_record:
+            record = matching_record
             updated = update_record(record, {
                 "status": "queued",
                 "action": "auto_ingest",

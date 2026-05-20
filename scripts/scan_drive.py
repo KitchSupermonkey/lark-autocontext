@@ -207,7 +207,8 @@ def discover(
         candidate = classify_candidate(raw, lane=lane)
         previous = latest.get(candidate["id"])
         if previous and previous.get("fingerprint") == candidate.get("fingerprint"):
-            if previous.get("status") in {"auto_ingested", "skipped", "needs_review", "queued"}:
+            previous_status = previous.get("status")
+            if previous_status in {"auto_ingested", "skipped"} or previous_status == candidate.get("status"):
                 report["skipped_unchanged"] += 1
                 continue
 

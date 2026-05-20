@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from ingest_candidates import build_context_payload, rescan_targets
+from scan_state import append_event
 from scan_drive import extract_search_results
 from scan_state import append_event, latest_list, latest_records, update_record
 from score_candidates import classify_candidate
@@ -66,6 +67,42 @@ class AutoScanTests(unittest.TestCase):
         self.assertEqual([item["title"] for item in items], ["A", "B"])
         self.assertEqual(page_token, "next-token")
 
+    def test_lark_search_shape_reads_highlighted_title(self):
+        raw = {
+            "entity_type": "DOC",
+            "title_highlighted": "<em>甄选625方案讨论会</em> - 会议纪要",
+            "result_meta": {
+                "doc_types": "DOCX",
+                "token": "FH6wdQrXlouYIkx54V6c2H4Jnjd",
+                "url": "https://supermonkey.feishu.cn/docx/FH6wdQrXlouYIkx54V6c2H4Jnjd",
+                "update_time_iso": "2026-05-19T16:50:38+08:00",
+                "last_open_time_iso": "2026-05-19T18:12:54+08:00",
+                "owner_name": "夏靖龙",
+            },
+        }
+        candidate = classify_candidate(raw, now=datetime(2026, 5, 20, tzinfo=timezone.utc))
+
+        self.assertEqual(candidate["title"], "甄选625方案讨论会 - 会议纪要")
+        self.assertEqual(candidate["doc_type"], "docx")
+        self.assertEqual(candidate["action"], "auto_ingest")
+
+    def test_sheet_candidates_require_review(self):
+        raw = {
+            "entity_type": "WIKI",
+            "title_highlighted": "超猩甄选组织激励方案-运营组",
+            "result_meta": {
+                "doc_types": "SHEET",
+                "token": "WikiToken",
+                "url": "https://supermonkey.feishu.cn/wiki/WikiToken",
+                "update_time_iso": "2026-05-07T12:11:46+08:00",
+                "last_open_time_iso": "2026-05-07T15:07:18+08:00",
+            },
+        }
+        candidate = classify_candidate(raw, now=datetime(2026, 5, 20, tzinfo=timezone.utc))
+
+        self.assertEqual(candidate["doc_type"], "sheet")
+        self.assertEqual(candidate["action"], "needs_review")
+
     def test_rule_based_payload_uses_title_and_content(self):
         candidate = {
             "title": "星选咖啡 Q2 复盘",
@@ -84,6 +121,21 @@ class AutoScanTests(unittest.TestCase):
         self.assertIn("会员券成本", payload["core_conclusion"])
         self.assertIn("6月15日", payload["key_time"])
 
+    def test_project_name_strips_campaign_suffix(self):
+        candidate = {
+            "title": "甄选625方案讨论会 - 会议纪要",
+            "url": "https://feishu.cn/docx/AbCd1234",
+            "token": "AbCd1234",
+        }
+        extracted = {
+            "content": "<title>甄选625方案讨论会 - 会议纪要</title>\n<callout>核心结论：活动形式不大改。</callout>",
+            "doc_token": "AbCd1234",
+        }
+        payload = build_context_payload(candidate, extracted)
+
+        self.assertEqual(payload["project_name"], "甄选")
+        self.assertNotIn("<title>", payload["core_conclusion"])
+
     def test_rescan_url_adds_queued_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "scan_state.jsonl")
@@ -93,6 +145,24 @@ class AutoScanTests(unittest.TestCase):
             self.assertEqual(len(ids), 1)
             self.assertEqual(latest[ids[0]]["status"], "queued")
             self.assertEqual(latest[ids[0]]["action"], "auto_ingest")
+
+    def test_rescan_url_reuses_existing_candidate_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "scan_state.jsonl")
+            existing = append_event({
+                "id": "doc-1",
+                "url": "https://feishu.cn/docx/Manual123",
+                "token": "Manual123",
+                "title": "甄选625方案讨论会 - 会议纪要",
+                "doc_type": "docx",
+                "status": "auto_ingested",
+            }, state_path=state_path)
+            ids = rescan_targets([existing["url"]], state_path=state_path)
+            latest = latest_records(state_path)
+
+            self.assertEqual(ids, ["doc-1"])
+            self.assertEqual(latest["doc-1"]["title"], "甄选625方案讨论会 - 会议纪要")
+            self.assertEqual(latest["doc-1"]["status"], "queued")
 
 
 if __name__ == "__main__":

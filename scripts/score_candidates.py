@@ -41,7 +41,7 @@ LOW_VALUE_TERMS = [
 ]
 
 SUPPORTED_DISCOVERY_TYPES = {"docx", "doc", "sheet", "bitable", "wiki", "slides"}
-AUTO_READ_TYPES = {"docx", "doc", "sheet"}
+AUTO_READ_TYPES = {"docx", "doc"}
 
 
 def _deep_values(data: Any, keys: Iterable[str]) -> Optional[Any]:
@@ -75,6 +75,12 @@ def _as_str(value: Any) -> str:
     if isinstance(value, dict):
         return _as_str(_first(value, "name", "title", "text", "value"))
     return str(value)
+
+
+def _clean_text(value: Any) -> str:
+    text = _as_str(value)
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()
 
 
 def _parse_time(value: Any) -> Optional[datetime]:
@@ -167,16 +173,37 @@ def normalize_candidate(raw: Dict[str, Any], lane: str = "freshness") -> Dict[st
     if not token and url:
         token = _token_from_url(url)
 
-    doc_type = _as_str(_first(raw, "doc_type", "type", "file_type", "obj_type", "resource_type")).lower()
+    result_meta = raw.get("result_meta") if isinstance(raw.get("result_meta"), dict) else {}
+    doc_type = _as_str(
+        result_meta.get("doc_types")
+        or _first(
+            raw,
+            "doc_type",
+            "doc_types",
+            "type",
+            "file_type",
+            "obj_type",
+            "resource_type",
+            "entity_type",
+        )
+    ).lower()
     if not doc_type and url:
         doc_type = _type_from_url(url)
     doc_type = doc_type.replace("docs", "doc").replace("bitable_base", "bitable")
 
-    title = _as_str(_first(raw, "title", "name", "file_name", "docs_title")) or "(untitled)"
-    updated_at = _iso_time(_first(raw, "updated_at", "update_time", "edit_time", "edited_time", "modified_time"))
+    title = _clean_text(_first(raw, "title", "title_highlighted", "name", "file_name", "docs_title")) or "(untitled)"
+    updated_at = _iso_time(_first(
+        raw,
+        "updated_at",
+        "update_time",
+        "update_time_iso",
+        "edit_time",
+        "edited_time",
+        "modified_time",
+    ))
     created_at = _iso_time(_first(raw, "created_at", "create_time"))
-    opened_at = _iso_time(_first(raw, "opened_at", "open_time"))
-    creator = _as_str(_first(raw, "creator", "owner", "owner_id", "creator_id", "user_name"))
+    opened_at = _iso_time(_first(raw, "opened_at", "open_time", "last_open_time", "last_open_time_iso"))
+    creator = _clean_text(_first(raw, "creator", "owner", "owner_name", "owner_id", "creator_id", "user_name"))
     fingerprint_source = "|".join([doc_type, token, url, updated_at, title])
     fingerprint = sha1(fingerprint_source.encode("utf-8")).hexdigest()
 
@@ -327,9 +354,22 @@ def infer_tags(title: str, content: str = "") -> str:
 def infer_project_name(title: str) -> str:
     separators = [" - ", "_", "｜", "|", "：", ":", " "]
     clean_title = title.strip() or "未命名项目"
+    head = clean_title
     for separator in separators:
         if separator in clean_title:
             head = clean_title.split(separator, 1)[0].strip()
-            if head:
-                return head[:40]
-    return clean_title[:40]
+            break
+
+    cleanup_patterns = [
+        r"\s*20\d{2}.*$",
+        r"\s*Q[1-4].*$",
+        r"\s*\d{3,4}.*$",
+        r"\s*(?:周例会|例会|讨论会|会议|复盘|方案|需求|纪要).*$",
+    ]
+    for pattern in cleanup_patterns:
+        reduced = re.sub(pattern, "", head, flags=re.IGNORECASE).strip()
+        if reduced != head and len(reduced) >= 2:
+            head = reduced
+            break
+
+    return (head or clean_title)[:40]
