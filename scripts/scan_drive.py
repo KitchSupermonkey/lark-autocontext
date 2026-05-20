@@ -44,6 +44,19 @@ def friendly_cli_error(stderr: str, stdout: str = "") -> str:
         return payload or "lark-cli command failed"
 
 
+def scan_failure_hint(message: str) -> str:
+    lower = message.lower()
+    if "search:docs:read" in message:
+        if "pending approval" in lower or "under review" in lower:
+            return "飞书正在审批 search:docs:read 权限；审批通过后重试扫描。"
+        return '请追加授权搜索权限: lark-cli auth login --scope "search:docs:read" --no-wait'
+    if "not configured" in lower:
+        return "请先运行: lark-cli config init --new"
+    if "not logged in" in lower or "auth" in lower:
+        return "请先运行: lark-cli auth login --recommend --no-wait"
+    return "请检查 lark-cli 配置、用户身份和飞书权限后重试。"
+
+
 def run_search(args: List[str]) -> Dict[str, Any]:
     cmd = ["lark-cli", "drive", "+search", "--as", "user"] + args
     result = subprocess.run(
@@ -265,8 +278,9 @@ def main() -> None:
             ingest=not args.discover_only,
         )
     except RuntimeError as exc:
-        print(f"❌ 扫描失败: {exc}")
-        print("   如果是认证问题，请运行: lark-cli auth login --recommend --no-wait")
+        message = str(exc)
+        print(f"❌ 扫描失败: {message}")
+        print(f"   下一步: {scan_failure_hint(message)}")
         sys.exit(1)
     print_report(report)
 
