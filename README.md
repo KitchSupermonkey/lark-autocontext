@@ -1,105 +1,80 @@
-# 🪄 Lark AutoContext — 基于飞书 CLI 的业务上下文引擎
+# Lark AutoContext
 
-> **Powered by Lark CLI** | **跨Agent通用** | **Context Engineering**
+> 基于 OKF 标准的飞书业务上下文引擎 — Agent-agnostic business context management tool
 
-Lark AutoContext 是一个通用的业务上下文管理工具，通过纯 Python 脚本和 `lark-cli` 构建，不依赖任何特定 Agent 框架。它致力于解决 AI 时代的**上下文质量**瓶颈——让散落的信息变为结构化、可追溯、带时间线的业务知识。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
+## 🎯 What is this?
 
-## 🧠 为什么需要 Lark AutoContext？
+Lark AutoContext 把飞书文档、会议纪要、复盘报告自动转化为 [OKF (Open Knowledge Format)](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) 标准的 Markdown 知识库，让任何 Agent 都能快速准确地获取业务上下文。
 
-**"AI 的产出 = 模型能力 × Agent 框架 × 上下文质量"**
+**核心方程：** AI 的产出 = 模型能力 × Agent 框架 × 上下文质量
 
-在业务场景中，模型和Agent能力越来越强，**上下文质量**已成为核心挑战。
-- **痛点**：项目文档散落在飞书云文档、多维表格、聊天记录中。当你需要 AI 协助时，往往面临信息遗漏、上下文断裂、Token 浪费等问题。
-- **解决方案**：Lark AutoContext 基于 `lark-cli` 构建，自动将碎片化的业务信息提取、结构化、存储到多维表格中，并提供**带时间线的全局检索**。让你的 AI Agent 真正"懂业务"。
+## 🏗️ Architecture
 
----
-
-## ✨ 核心亮点
-
-| 特性 | 说明 |
-| :--- | :--- |
-| 🚀 **纯 `lark-cli` 驱动** | 不依赖 MCP Server 或复杂插件。基于官方 CLI 构建，稳定、轻量、兼容性好。 |
-| 🔗 **上下文可追溯** | 每一行数据都对应一个原始文档（自动转存飞书文档），点击即可溯源，拒绝 AI 幻觉。 |
-| 📅 **决策时间线回溯** | 不仅记录结果，更记录演变过程。"4.1 定方案 A → 4.15 因成本改方案 B"，一目了然。 |
-| 🔍 **全局智能检索** | 无需指定项目名，直接问"关于优惠券做了什么决策"，AI 自动跨表搜索并综合回答。 |
-| 📦 **跨Agent通用** | 纯 Python + `SKILL.md` 设计。任何支持 Markdown 指令的 AI Agent 均可运行。 |
-
----
-
-## 📽️ 核心场景演示
-
-### 1. 碎片信息自动入库
-直接把文档/图片链接发给 Agent，无需手动填写表单。
-1. **输入**：`帮我存一下这个复盘文档：https://feishu.cn/docx/...`
-2. **处理**：Agent 调用 `lark-cli` 提取内容，展示预览卡片。
-3. **确认**：用户点击 OK，数据自动写入多维表格。
-
-### 2. 上下文时间线回溯
-当需要回顾历史决策时：
-- **User**: "我们的运营策略变过几次？"
-- **Lark AutoContext**: "经历 3 次变更：
-  1. 4 月 1 日初定 A 方案 [🔗溯源]
-  2. 4 月 15 日因成本调整为 B 方案 [🔗溯源]
-  3. 5 月 1 日正式上线 C 方案 [🔗溯源]"
-
-### 3. 全局智能检索
-跨项目、跨表格的知识汇总：
-- **User**: "我们在所有项目中关于预算的决策分别是什么？"
-- **Lark AutoContext**: 自动遍历所有项目表，按时间线汇总并输出决策摘要。
-
----
-
-## 🛠️ 快速开始 (Quick Start)
-
-### 1. 前置准备
-确保已安装并配置好官方 `lark-cli`：
-```bash
-# 验证安装
-lark-cli --version
-
-# 绑定飞书应用 (以 Hermes 为例)
-lark-cli config bind --source hermes
-lark-cli auth login --recommend
+```
+飞书文档 → Scanner 提取 → Agent AI分类 → OKF Writer 生成 .md → Bundle (Git)
+                                                              ↓
+                                                        Query Engine
+                                                              ↓
+                                                           Agent
 ```
 
-### 2. 安装与初始化
+- **OKF-first**: 知识以 OKF Markdown 存储，Git 版本控制
+- **Agent-agnostic**: 任何 Agent 都能通过 Skill 脚本读取
+- **飞书为辅**: 飞书是数据源，不是存储引擎
+
+## 📦 Installation
+
+### Prerequisites
+- Python 3.8+
+- [lark-cli](https://www.npmjs.com/package/lark-cli) (`npm install -g @larksuiteoapi/lark-cli`)
+- Feishu account with API access
+
+### Setup
 ```bash
-# 克隆仓库
 git clone https://github.com/KitchSupermonkey/lark-autocontext.git
 cd lark-autocontext
-
-# 初始化多维表格 (自动创建 Base 并写入配置)
-python scripts/init_base.py
+cp scripts/config.json.example scripts/config.json
+cp scripts/scan_config.json.example scripts/scan_config.json
+# Edit config.json and scan_config.json with your tokens
+python scripts/init_bundle.py
+python scripts/onboarding.py
 ```
 
-### 3. 开始使用
+## 🚀 Usage
 
-在你的 AI Agent 中加载 `SKILL.md`，然后通过以下任一方式开始使用：
+### Save Single Document
+```
+保存这个文档 https://feishu.cn/docx/xxx
+```
 
-| 方式 | 示例 | 说明 |
-| :--- | :--- | :--- |
-| 💬 **自然语言** | "帮我存一下这个文档：https://feishu.cn/docx/..." | 发链接 + 保存意图，自动触发 |
-| 🔧 **斜杠命令** | `/lark-autocontext https://feishu.cn/docx/...` | 明确的指令入口 |
-| 🔍 **提问检索** | "我们关于优惠券做了什么决策？" | 自动跨表搜索 + 时间线回答 |
+### Batch Scan
+```
+扫描飞书文档
+```
 
----
+### Query Context
+```
+lark-autocontext 项目里关于重构的信息？
+```
 
-## 🏗️ 技术架构
+## 📁 Project Structure
 
-本项目展示了 `lark-cli` 在复杂业务流中的最佳实践：
-- **Sub-Agent 隔离架构**：入库与检索均交由 Sub-Agent 执行，主 Agent 仅负责交互，彻底解决长上下文窗口污染问题。
-- **一项目一表 (One Project One Table)**：动态多维表格架构，支持无限扩展，互不干扰。
-- **自动化流水线**：`lark-cli` 驱动的全链路脚本（提取 -> 建表 -> 写入 -> 仪表板生成 -> 全局检索）。
+```
+lark-autocontext/
+├── scripts/
+│   ├── cli.py            # Feishu API wrapper
+│   ├── scanner.py        # Document scanner
+│   ├── okf_writer.py     # OKF Markdown generator
+│   ├── query.py          # Query engine
+│   ├── init_bundle.py    # Bundle initialization
+│   └── onboarding.py     # Status check
+├── bundle/               # OKF Bundle (knowledge storage)
+├── SKILL.md              # Agent skill definition
+└── README.md
+```
 
----
+## 📄 License
 
-## 📜 许可证
-本项目基于 MIT 许可证开源。
-
-## 🙏 致谢
-- [larksuite/cli](https://github.com/larksuite/cli) - 飞书 CLI 开源项目
-- 飞书开放平台
-
----
+MIT License - see [LICENSE](LICENSE) file for details.
