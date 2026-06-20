@@ -1,251 +1,277 @@
 ---
 name: lark-autocontext
 description: |
-  Trigger when user mentions ANY of: 保存上下文 / 存入上下文 / 业务记忆 / 项目知识 / 存入知识库 / lark-autocontext / /lark-autocontext / 保存到业务上下文.
+  Trigger when user mentions ANY of: 保存上下文 / 存入上下文 / 业务记忆 / 项目知识 / 存入知识库 / lark-autocontext / /lark-autocontext / 保存到业务上下文 / 扫描飞书 / 同步飞书知识.
   Also trigger when: user sends a Feishu doc/sheet link with intent to store or remember.
-  Supports: save documents, retrieve project history, ask cross-project questions.
+  Supports: save single document, batch scan Feishu sources, retrieve project history, ask cross-project questions.
   If config.json is missing, guide first-time setup automatically.
 ---
 
-# Lark AutoContext
+# Lark AutoContext (OKF Architecture)
 
 ## 🎯 Quick Start (首次使用引导)
 
-**When this skill is triggered for the first time** (config.json missing or base_token empty):
+**When this skill is triggered for the first time** (config.json missing or bundle not initialized):
 
 Show the user this onboarding card **before any other action**:
 
 ```
-🧙 **Lark AutoContext** — 你的业务记忆库
+🧙 **Lark AutoContext** — 你的业务记忆库 (OKF 架构)
 
-让业务知识永不丢失。把飞书文档、会议纪要、复盘报告自动转化为可检索的结构化知识。
+让业务知识永不丢失。把飞书文档、会议纪要、复盘报告自动转化为 OKF 标准知识。
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
 📌 **如何使用？**
 
-方式 1️⃣  自动触发
+方式 1️⃣  保存单文档
   直接发文档链接 + "帮我存一下" / "保存到上下文"
-  → 自动提取 → 预览确认 → 入库
+  → 自动提取 → AI分类 → 生成OKF Markdown → 入库
 
-方式 2️⃣  斜杠命令
-  /lark-autocontext [文档链接]
-  → 同上，更明确的指令
+方式 2️⃣  批量扫描
+  "扫描飞书文档" / "同步飞书知识"
+  → 批量提取 → AI分类 → 生成OKF Markdown → 入库
 
-方式 3️⃣  直接提问
+方式 3️⃣  查询上下文
   "XX 项目里关于优惠券做了什么决策？"
-  → 跨表搜索 → 时间线回答
+  → 查询OKF Bundle → 返回结果
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
 ⚡ **首次使用：需要初始化**
 
-我将为你自动创建一个飞书多维表格 Base 来存储上下文数据。
+我将为你自动创建 OKF Bundle 目录来存储知识。
 确认后输入 ✅ 或 "开始"，我会自动完成。
 ```
 
-**After user confirms**, run `python scripts/init_base.py` automatically and show:
+**After user confirms**, run `python scripts/init_bundle.py` automatically and show:
 ```
-✅ 业务上下文引擎已初始化！
-🔗 Base URL: https://...
+✅ OKF Bundle 已初始化！
 📝 现在可以开始保存上下文了。
 ```
 
-Then **wait for the user's next message** (the actual document or question).
+Then **wait for the user's next message**.
 
 ---
 
-This skill guides the agent to extract, verify, and store business context from Feishu documents, sheets, images, or text into a structured database (Feishu Base).
-
-## ⚠️ Context Protection Architecture
-To prevent context window pollution and ensure the Main Agent remains responsive:
-- **Main Agent (Manager)**: Handles user interaction, shows preview cards, orchestrates saving data. **NEVER** reads raw document content or runs heavy extraction scripts directly.
-- **Sub-Agent (Worker)**: Handles data fetching, parsing, and summarization. **ALWAYS** delegates raw data processing to a sub-agent.
+This skill guides the agent to extract, classify, and store business context from Feishu documents into an OKF-compliant Markdown Bundle.
 
 ## 🔧 Configuration
 
-Scripts automatically load `scripts/config.json` if `base_token` is not provided explicitly.
+Scripts automatically load `scripts/config.json` for bundle path and optional Feishu config.
+Batch scanning requires `scripts/scan_config.json` (copy from `scan_config.json.example`).
 
 **First-time Setup (Auto-detected):**
-- If `config.json` is missing or `base_token` is empty → trigger the **Quick Start** onboarding flow above.
+- If `config.json` is missing → trigger the **Quick Start** onboarding flow above.
+- If Bundle directory doesn't exist → run `python scripts/init_bundle.py`.
 - **NEVER** show raw Python tracebacks to the user. Always catch errors and provide friendly guidance.
 
-## Mandatory Workflow
+## Mandatory Workflows
 
 ### Step 0: First-Time Check (ALWAYS run first)
 - Run `python scripts/onboarding.py` to check setup status.
 - If it shows ❌ or ⚠️ → trigger the **Quick Start** onboarding flow above.
-- If all ✅ → proceed to Step 1.
+- If all ✅ → proceed to appropriate workflow.
 
-### Step 1: Identify Intent
-Check for these trigger patterns:
+---
 
-| Pattern | Action |
-|---------|--------|
-| `/lark-autocontext <link>` | Save document to context |
-| `/lark-autocontext <question>` | Search context and answer |
-| "保存上下文" / "存入上下文" / "保存到业务上下文" | Save document to context |
-| Feishu doc link + save intent | Save document to context |
-| "XX 项目里关于 XX" / "做过什么决策" | Search context and answer |
-| Open-ended question about past work | Global search (Mode B) |
+## Workflow A: Single Document Save
 
-Identify the input type: Feishu Doc/Sheet link, image, or text.
-Identify the `Entity Type`: Project, Client, Partner, Product.
-Identify the `Project Name`: The name of the project this context belongs to.
+**Trigger:** User sends a Feishu doc/sheet link with save intent, or says "保存这个文档 <link>".
 
-### Step 2: Delegate Extraction (CRITICAL STEP)
-- **Do NOT** run extraction scripts or read content in this main session.
-- **Spawn a Sub-Agent** with the following specific task:
-  > "Run the command `python scripts/extract_data.py <link_or_text>`. The output will contain the raw content. 
-  > 
-   > Parse this content and extract ONLY the following fields into a JSON object:
-   > - `project_name` (**主项目名**：业务线/产品/客户的主名称，如「星选咖啡」。用于匹配/创建多维表格表名)
-   > - `entity_name` (**具体实体名**：文档标题/会议名/事件名，如"630项目复盘"、"Q2 需求评审会")
-   > - `doc_type` (文档类型: 会议纪要/需求文档/复盘报告/运营方案/合作协议/数据分析/竞品调研/其他)
-   > - `core_conclusion` (核心结论/决策/发现，简明扼要)
-   > - `key_time` (文档提及的关键时间节点，如"2026 Q2"、"630 大促"、"5月15日")
-   > - `people` (涉及的关键人员/团队，逗号分隔)
-   > - `tags` (关键词标签，便于检索，逗号分隔)
-   > - `source_link` (The original link or source description)
-   > - `doc_token` (Extract from link, or 'N/A' if not a Feishu doc)
-  > 
-  > **重要判断规则**：
-  > - 如果文档标题包含日期/阶段/版本号（如"630"、"Q2"、"v2.0"），那通常是具体实体名
-  > - 主项目名是更上层的业务线名称
-  > - 例：「lark-autocontext 630项目复盘」→ project_name="lark-autocontext", entity_name="630项目复盘"
-  > 
-  > Return ONLY the valid JSON object."
-- **Receive Result**: The Sub-Agent returns the clean JSON.
+### Step A1: Extract Document Content
+- Run `python scripts/scanner.py --doc "<url>"`.
+- The script extracts content from Feishu and returns JSON with `source_type`, `doc_token`, `title`, `url`, `content`.
 
-### Step 3: Prepare Target Table (One Project = One Table)
-- **Identify Project Name**: Use the `project_name` from extraction.
-- **Ensure Table Exists**: Run `python scripts/get_or_create_table.py <project_name>`.
-  - The script automatically uses the `base_token` from `config.json`.
-- **Receive Result**: The script returns the `table_id` for that project table.
+### Step A2: Classify Document (AI Classification)
+Read the document content and apply the **Classification Guide** below to extract structured fields.
 
-### Step 4: Handle Non-Feishu Inputs (Auto-Generate Doc)
-- **Check**: Is the input a Feishu Doc/Sheet link?
-  - **YES**: Skip this step. Use the original link as `source_link`.
-  - **NO** (Image/Text/External Link): 
-    1. Call `python scripts/create_doc.py '<entity_name> - Context Note' '<formatted_content>'`.
-    2. The script returns a new Feishu Doc URL.
-    3. Update the `source_link` to this new Feishu Doc URL.
-    *This ensures every record in the Base has a clickable Feishu doc for traceability.*
+### Step A3: Generate OKF Markdown
+- Construct the classified JSON (see Classification Guide for fields).
+- Run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
+- The script writes the .md file to the Bundle and updates index.md/log.md.
 
-### Step 5: Preview Card (CRITICAL)
-- Display the extracted information to the user:
-  ```markdown
-  📋 **Context Preview**
-  - **项目名**: {project_name}
-  - **实体**: {entity_name}
-  - **文档类型**: {doc_type}
-  - **关键时间**: {key_time}
-  - **涉及人员**: {people}
-  - **标签**: {tags}
-  - **核心结论**: {core_conclusion}
-  - **来源**: {source_link}
-  
-  ✅ 确认保存？（回复修改意见或"确认"）
-  ```
-- **STOP HERE**. Wait for user confirmation.
+### Step A4: Show Save Summary
+```
+✅ 已保存到 OKF Bundle
+📄 文件: projects/{project}/{category}/{filename}
+🏷️ 类型: {type}
+📝 描述: {description}
+🔗 来源: {resource}
+```
 
-### Step 6: Deduplication Check
-- Before saving, check if a record with the same `doc_token` already exists in the project table.
-- **How to check**: Run `python scripts/search_context.py '<project_name>'` or use `lark-cli base +record-search --base-token <token> --table-id <table_id> --json '{"keyword":"<doc_token>","search_fields":["文档 Token"]}'`.
-- **If exists**: Update the existing record using `lark-cli base +record-batch-update` with the found record_id.
-- **If new**: Create a new record via `write_context.py`.
+### Step A5: Commit to Git
+- Run `git add bundle/` and `git commit -m "docs: save {title} to OKF Bundle"`.
 
-### Step 7: Save to Base
-- Once confirmed, run `python scripts/write_context.py '<json_data>' <table_id>`.
-  - The script automatically uses the `base_token` from `config.json`.
-- Report the result and provide the link to the Base.
+---
 
-### Step 8: Dashboard (Auto-Created)
-- The dashboard is **automatically created** when a new project table is created.
-- It includes: context count, entity type pie chart, status column chart, and project info text.
-- No manual action needed — it's part of the `get_or_create_table.py` flow.
+## Workflow B: Batch Scan
 
-## Data Schema
-The target Feishu Base has the following fields:
-- `实体名称` (Entity Name: Document/Meeting title)
-- `文档类型` (Doc Type: 会议纪要/需求文档/复盘报告/运营方案/合作协议/数据分析/竞品调研/其他)
-- `核心结论` (Core Conclusion: Key decision/finding)
-- `关键时间` (Key Time: Important dates/phases mentioned)
-- `涉及人员` (People: Key stakeholders)
-- `标签` (Tags: Keywords for search)
-- `关联文档` (Source Link: Feishu Doc URL)
-- `文档 Token` (Doc Token for deduplication)
-- `最后更新` (Last Updated)
+**Trigger:** User says "扫描飞书文档" / "同步飞书知识" / "批量导入".
 
-## Retrieval Mode (Supports both project-specific and global search)
-To prevent context overload when retrieving long histories:
+### Step B1: Run Scanner
+- Run `python scripts/scanner.py` (reads scan_config.json automatically).
+- The script scans all configured Feishu sources and returns JSON with `documents` array.
 
-### Mode A: Project-Specific Search (指定项目检索)
-When the user explicitly mentions a project name (e.g., "lark-autocontext项目里关于 XX 的信息").
+### Step B2: Classify Each Document
+For each document in the scan result, apply the **Classification Guide** to extract structured fields.
 
-1. **Identify Intent**: User asks a question about a specific project.
-2. **Spawn a Sub-Agent** with the following specific task:
-   > "Run the command `python scripts/search_context.py '<Project Name>'`. 
-   > 
-   > This returns JSON records for that project's context history.
-   > The script automatically uses the `base_token` from `config.json`.
-   > 
-   > **Your Task:**
-   > 1. Parse the JSON records.
-   > 2. Answer the user's question based ONLY on these records.
-   > 3. If records exist, include the `source_link` in your answer.
-   > 4. If no records found, say 'No context found for this project.'
-   > 
-   > **Output:** Return ONLY the answer text. Do NOT return raw JSON."
-3. **Main Agent Action**: Receive the summarized answer from Sub-Agent and present it to the user.
+### Step B3: Generate OKF Markdown for Each
+- For each classified document, run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
+- Process documents one by one.
 
-### Mode B: Global Smart Search (全局智能检索)
-When the user asks an **open-ended question** without specifying a project (e.g., "我们关于优惠券做了什么决策？").
+### Step B4: Show Scan Summary
+```
+✅ 扫描完成
+📊 总计: {total} 个文档
+🆕 新增: {created} 个
+🔄 更新: {updated} 个
+⚠️ 失败: {failed} 个
+```
 
-**Flow:**
-1. **Extract Keywords**: AI extracts 1-3 core keywords from the user's question.
-2. **Call Global Search**: Run `python scripts/global_search.py "<keywords>"`. The script automatically uses the `base_token` from `config.json`.
-3. **Receive Results**: The script returns JSON: `{"query": "...", "count": N, "records": [...]}`, with records sorted by `最后更新` in descending order.
-   - Each record includes metadata fields:
-     - `_project_name`: The project name (table name) the record belongs to. Use this to label the source in your answer.
-     - `_table_id`: The Feishu Base table ID of the record.
-   - **Error Handling**: If the response contains an `"error"` field, report the error to the user and guide them to run `python scripts/init_base.py` to initialize the base token.
-   - **Boundary Handling**: If `count > 20`, inform the user "找到较多相关内容，建议缩小搜索范围" and provide a grouped summary by project.
-4. **Synthesize Answer**:
-   - If `count == 0`: Reply "未找到相关内容".
-   - If `count > 0`: Based on the sorted records, provide a coherent, comprehensive answer organized by **timeline**.
-   - If the same entity has multiple records, highlight changes (e.g., "最初计划 X，后在 Y 日期调整为 Z").
-   - Append source links at the end, citing the `_project_name` for each referenced item.
+### Step B5: Commit to Git
+- Run `git add bundle/` and `git commit -m "docs: batch scan {total} documents to OKF Bundle"`.
+
+---
+
+## Workflow C: Query Context
+
+**Trigger:** User asks a question about stored context.
+
+### Mode 1: Project-Scoped Query
+When user mentions a specific project (e.g., "lark-autocontext项目里关于 XX 的信息"):
+- Run `python scripts/query.py --project "<project_name>" --keyword "<keyword>"`.
+- Parse the JSON results and answer the user's question.
+- Include `resource` links for traceability.
+
+### Mode 2: Global Search
+When user asks an open-ended question (e.g., "最近有什么关于 OKF 的讨论？"):
+- Run `python scripts/query.py --keyword "<keyword>"`.
+- Results are sorted by timestamp descending.
+- Synthesize a coherent answer from multiple sources.
+
+### Mode 3: Type Filter
+When user asks for a specific type (e.g., "给我所有会议纪要"):
+- Run `python scripts/query.py --type "Meeting Minutes"`.
+- Return the list of matching documents.
+
+### Getting Full Content
+- Query results include `body_preview` (first 200 chars) and `file_path`.
+- When full content is needed, Read the .md file at `bundle/{file_path}`.
+
+---
+
+## Classification Guide
+
+When you receive document content from the Scanner, analyze it and extract:
+
+1. **project**: Which project does this belong to? Infer from:
+   - Document title (e.g., "Lark AutoContext 周会" → project: "lark-autocontext")
+   - Content context (e.g., mentions of specific project names)
+   - Folder/wiki space structure if available
+   - If unclear, ask the user
+
+2. **type**: What kind of document is this? Choose from:
+   | type | Use when |
+   |------|----------|
+   | `Meeting Minutes` | Contains meeting notes, attendees, action items |
+   | `Requirement Doc` | Describes features, user stories, acceptance criteria |
+   | `Review Report` | Post-mortem analysis, lessons learned |
+   | `Operation Plan` | Strategy, roadmap, operational procedures |
+   | `Data Analysis` | Charts, metrics analysis, data insights |
+   | `Competitor Research` | Market analysis, competitor comparison |
+   | `Contract` | Agreements, terms, legal documents |
+   | `Reference` | Documentation, guides, how-tos |
+   | `Metric` | Business metrics definitions, KPIs |
+   | `Other` | Doesn't fit above categories |
+
+3. **Structured fields**: Extract from content:
+   - title: Document title
+   - description: One-sentence summary
+   - tags: 2-5 relevant keywords (as array)
+   - people: Names mentioned as participants/authors (as array)
+   - key_dates: Important dates mentioned (as array of {"date": "...", "event": "..."})
+   - core_conclusion: Main takeaway or conclusion
+   - filename: Generate from title, e.g., "2026-06-20 重构讨论" → "2026-06-20-重构讨论.md"
+   - resource: The original Feishu document URL (for traceability and deduplication)
+
+4. **category**: Auto-derived from type:
+   | type | category |
+   |------|----------|
+   | Meeting Minutes | meetings |
+   | Requirement Doc | requirements |
+   | Review Report | reviews |
+   | Operation Plan | plans |
+   | Data Analysis | analysis |
+   | Competitor Research | research |
+   | Contract | contracts |
+   | Reference | references |
+   | Metric | metrics |
+   | Other | misc |
+
+### Classified JSON Example
+
+```json
+{
+  "project": "lark-autocontext",
+  "type": "Meeting Minutes",
+  "category": "meetings",
+  "title": "2026-06-20 重构讨论",
+  "description": "讨论 OKF 重构方案",
+  "tags": ["重构", "OKF"],
+  "people": ["张三", "李四"],
+  "key_dates": [{"date": "2026-06-20", "event": "方案确定"}],
+  "core_conclusion": "采用 Pipeline 架构，OKF 为主存储",
+  "filename": "2026-06-20-重构讨论.md",
+  "resource": "https://feishu.cn/docx/abc123"
+}
+```
+
+---
+
+## OKF Bundle Structure
+
+```
+bundle/
+├── index.md              # Root navigation
+├── log.md                # Change history
+├── projects/             # Organized by project
+│   ├── index.md
+│   └── {project}/        # One directory per project
+│       ├── index.md
+│       ├── meetings/
+│       ├── requirements/
+│       └── ...
+├── concepts/             # Cross-project concepts
+└── people/               # People info
+```
 
 ## Pitfalls & Lessons Learned
-1. **Preview Card Rendering**: Use plain text list format (Step 5 template), NOT markdown tables. Tables fail to render in Feishu mobile.
-2. **Context ≠ Project Management**: Schema uses generic fields (文档类型/核心结论/关键时间/涉及人员/标签) — NOT project fields (风险/进度/预算/优先级). Any doc type (meeting notes, requirements, reports, agreements) fits this schema.
-3. **Project vs Entity Name**: Table names are project-level (e.g., "lark-autocontext"), not document-level. Multiple docs from same project accumulate in one table as separate records.
-4. **关联文档 Auto-fill**: `write_context.py` auto-generates Feishu doc URLs from `doc_token`. Only skips if token is "N/A" or starts with "TEST_".
-5. **Record Updates**: `lark-cli base +record-upsert` without `--record-id` always creates new records. Use `+record-batch-update` with `'{"record_id_list":[...],"patch":{...}}'` for updates.
-6. **lark-cli field-create**: Use `--json '{"name":"X","type":"text"}'` — do NOT include `ui_type` or `property` keys (API rejects them).
-7. **Field Name Matching**: JSON keys in `record-upsert` must exactly match field names in the table. Use `lark-cli base +field-list` to verify.
-8. **Dashboard Block Creation**: Must run serially with `time.sleep(1.5)` between each block to avoid QPS rate limits.
+
+1. **Preview Card Rendering**: Use plain text list format, NOT markdown tables. Tables fail to render in Feishu mobile.
+2. **Deduplication**: OKF Writer uses `resource` field (Feishu doc_token) to detect duplicates. Same doc scanned twice = update, not duplicate.
+3. **Filename Safety**: Filenames are sanitized (no `<>:"/\|?*` characters).
+4. **Index Updates**: Every write updates the category's index.md and root log.md automatically.
+5. **Incremental Scan**: Scanner tracks `last_modified` to skip unchanged documents on subsequent scans.
+6. **Windows Encoding**: All scripts force UTF-8 output on Windows to handle Chinese characters and emoji.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| 首次使用 / 没有 config.json | 运行 `python scripts/init_base.py` 自动创建 Base 和配置文件 |
+| 首次使用 / 没有 config.json | 运行 `python scripts/init_bundle.py` 自动创建 Bundle |
+| Bundle 未初始化 | 运行 `python scripts/init_bundle.py` |
 | Token 过期 / 认证失败 | 运行 `lark-cli auth login --recommend --no-wait` 重新登录 |
-| 字段名不匹配 | 运行 `lark-cli base +field-list --base-token <token> --table-id <id>` 查看实际字段名 |
-| 表不存在 | 确保 `project_name` 拼写正确，系统会自动创建新表 |
+| 扫描配置缺失 | 从 `scan_config.json.example` 复制并填写飞书 token |
+| 查询无结果 | 先保存文档或运行批量扫描 |
 | 提取失败 | 检查文档链接格式是否正确（应为 feishu.cn/docx/xxx） |
-| Dashboard 已存在 | 正常，系统会复用已有 Dashboard |
 
 ### ⚠️ Windows 用户注意
-项目已内置跨平台兼容（GBK 编码 / subprocess shell），但以下事项仍需注意：
 
 | 问题 | 说明 |
 |------|------|
 | **PowerShell `&&` 不支持** | Windows PowerShell 不支持 `&&` 连接符，请用分号 `;` 或直接分开运行命令 |
-| **PowerShell JSON 引号转义** | 在 PowerShell 中直接传递 `--json "{...}"` 时引号会被转义，**建议使用 Python 脚本调用**而非直接敲 lark-cli |
-| **命令行参数传递中文** | PowerShell 传递含中文/特殊字符的 JSON 参数可能解析失败，**建议通过脚本内部调用** |
+| **PowerShell JSON 引号转义** | 在 PowerShell 中直接传递 `--json "{...}"` 时引号会被转义，**建议使用 Python 脚本调用** |
 
 **错误处理铁律**：
 - ❌ **禁止** 向用户展示 Python traceback 或 raw JSON 错误
