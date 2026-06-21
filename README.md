@@ -1,6 +1,6 @@
 # Lark AutoContext
 
-> 基于 OKF 标准的飞书业务上下文引擎 — Agent-agnostic business context management tool
+> **lark-autocontext** —— 把飞书（Lark）文档自动转成 OKF 标准的项目知识 bundle，供 AI Agent 长期上下文使用。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -59,18 +59,44 @@ python scripts/onboarding.py
 lark-autocontext 项目里关于重构的信息？
 ```
 
+## 🔄 Auto-Sync 工作流
+
+```bash
+# 首次（让 Agent 跑）
+python scripts/onboarding.py --quiet
+
+# 之后每次扫描（或交给 Agent 定时任务）
+python scripts/auto_sync.py list-only
+# Agent 会按 SKILL.md Workflow D 分类并写入 bundle
+python scripts/auto_sync.py finalize --commit
+```
+
+详见 [SKILL.md](./SKILL.md) Workflow D 与 Agent Cron Setup。
+
+## 📊 可视化
+
+```bash
+python scripts/visualize.py --bundle bundle/ --out viz.html
+# 浏览器打开 viz.html
+```
+
+生成单文件 HTML（Cytoscape.js 力导向图 + marked.js 渲染），节点颜色按 OKF `type` 区分，支持搜索过滤。
+
 ## 📁 Project Structure
 
 ```
 lark-autocontext/
 ├── scripts/
 │   ├── cli.py            # Feishu API wrapper
-│   ├── scanner.py        # Document scanner
-│   ├── okf_writer.py     # OKF Markdown generator
+│   ├── scanner.py        # Document scanner (--list-changed for incremental)
+│   ├── okf_writer.py     # OKF Markdown generator (cross-links, upsert)
+│   ├── auto_sync.py      # Auto-Sync coordinator (list-only + finalize)
+│   ├── visualize.py      # Single-file HTML visualizer
 │   ├── query.py          # Query engine
 │   ├── init_bundle.py    # Bundle initialization
-│   └── onboarding.py     # Status check
+│   └── onboarding.py     # Status check (--quiet for automation)
 ├── bundle/               # OKF Bundle (knowledge storage)
+├── tests/                # pytest test suite
 ├── SKILL.md              # Agent skill definition
 └── README.md
 ```
