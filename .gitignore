@@ -10,3 +10,8 @@ scripts/config.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Auto-Sync state
+.auto_sync/
+bundle/.state.json
+bundle/.failed/
