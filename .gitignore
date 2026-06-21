@@ -6,6 +6,7 @@ __pycache__/
 
 # Config (contains tokens)
 scripts/config.json
+scripts/scan_config.json
 
 # OS
 .DS_Store
@@ -15,3 +16,10 @@ Thumbs.db
 .auto_sync/
 bundle/.state.json
 bundle/.failed/
+
+# Local business data (privacy)
+bundle/projects/supermonkey-xuanzhen/
+bundle/log.md
+bundle/projects/index.md
+query_temp.json
+viz.html
