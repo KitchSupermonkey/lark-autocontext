@@ -161,6 +161,56 @@ When user asks for a specific type (e.g., "给我所有会议纪要"):
 
 ---
 
+## Workflow D: Auto-Sync (自动同步)
+
+**Trigger:** Agent 定时任务调用 / 用户说"扫一遍飞书" / "同步飞书知识".
+
+### Step D1: List Changed Documents
+- Run `python scripts/auto_sync.py list-only --config config.json`.
+- This produces `.auto_sync/pending_changes.json` with all changed docs since last sync.
+
+### Step D2: Classify & Write Each Change
+Read `.auto_sync/pending_changes.json`. For each entry in `changes`:
+1. Fetch full content: `python scripts/scanner.py --doc "<url>"` (content is auto-cleaned).
+2. Apply the **Classification Guide** to determine `type`, `project`, `category`, etc.
+3. Run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
+   - People/Concept entities are auto-upserted with preserved `# Profile` / `# Definition` regions.
+
+### Step D3: Finalize
+- Run `python scripts/auto_sync.py finalize --commit`.
+- This updates `.auto_sync/state.json` watermarks and commits to git.
+
+### Step D4: Summary
+```
+✅ 同步完成
+📊 本次: {N} 篇文档
+📁 路径: bundle/projects/...
+⏭️  下次自动跳过未变更文档
+```
+
+**幂等保证:** 同一 `resource`（doc_token）重跑不会产生重复条目；人工编辑过的 `# Profile` / `# Definition` 区段不会被覆盖。
+
+---
+
+## Agent Cron Setup
+
+本项目不内置守护进程，定时由 Agent 侧承担。
+
+### TRAE Schedule
+使用 Schedule 工具，cron `0 9 * * *`，message：
+> 在 lark-autocontext 项目下执行 Workflow D（自动同步飞书到 bundle）。完成后只输出一句"同步 N 篇"或"无变化"。
+
+### Cursor Tasks
+在项目根 `.cursor/tasks.json` 里登记同样的命令序列。
+
+### Claude Code cron
+通过用户自己的 crontab：
+```
+0 9 * * * cd ~/projects/lark-autocontext && claude --workflow=auto-sync
+```
+
+---
+
 ## Classification Guide
 
 When you receive document content from the Scanner, analyze it and extract:
@@ -183,17 +233,23 @@ When you receive document content from the Scanner, analyze it and extract:
    | `Contract` | Agreements, terms, legal documents |
    | `Reference` | Documentation, guides, how-tos |
    | `Metric` | Business metrics definitions, KPIs |
+   | `Person` | 文档作者 / 频繁被 `@` 的人（自动入库到 `bundle/people/`） |
+   | `Concept` | 反复出现的术语 / 缩写 / 项目代号（自动入库到 `bundle/concepts/`） |
    | `Other` | Doesn't fit above categories |
 
 3. **Structured fields**: Extract from content:
    - title: Document title
-   - description: One-sentence summary
+   - description: One-sentence summary (meaningful, not mechanical "{type} - {title}")
    - tags: 2-5 relevant keywords (as array)
    - people: Names mentioned as participants/authors (as array)
-   - key_dates: Important dates mentioned (as array of {"date": "...", "event": "..."})
-   - core_conclusion: Main takeaway or conclusion
+   - concepts: Key terms / acronyms / project codenames (as array)
+   - summary: 1-3 sentence summary of the document
+   - key_points: Main takeaways (as array of strings)
+   - decisions: For Meeting Minutes / Review Reports (as array of {"decision","owner","deadline"})
+   - action_items: For Meeting Minutes / Requirement Docs (as array of {"task","owner","due"})
    - filename: Generate from title, e.g., "2026-06-20 重构讨论" → "2026-06-20-重构讨论.md"
    - resource: The original Feishu document URL (for traceability and deduplication)
+   - edited_time: Real edit timestamp from Feishu (used as `timestamp` in frontmatter)
 
 4. **category**: Auto-derived from type:
    | type | category |
@@ -208,6 +264,18 @@ When you receive document content from the Scanner, analyze it and extract:
    | Reference | references |
    | Metric | metrics |
    | Other | misc |
+
+### OKF Body Structure (7 Sections)
+
+All documents follow this body structure (sections are omitted when empty):
+
+1. `# Summary` — 1-3 sentence summary
+2. `# Key Points` — Bullet list of main takeaways
+3. `# Decisions` — (Meeting Minutes / Review Report only) Decisions with owner + deadline
+4. `# Action Items` — (Meeting Minutes / Requirement Doc only) Tasks with owner + due
+5. `# Source Content` — Original document content (auto-cleaned)
+6. `# Related` — Cross-links to people/concepts/projects (auto-generated)
+7. `# Citations` — Link to original Feishu document
 
 ### Classified JSON Example
 
