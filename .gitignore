@@ -23,3 +23,6 @@ bundle/log.md
 bundle/projects/index.md
 query_temp.json
 viz.html
+
+# Internal design docs (not for public)
+docs/superpowers/
