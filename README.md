@@ -30,8 +30,6 @@ Agent：✅ 已生成 viz.html，浏览器打开可看到文档关系图
 
 **一句话：** 飞书散落文档 → 结构化上下文，自动分类、增量同步、Agent 直接读。
 
-所有操作均需用户主动触发，仅访问你配置的飞书数据源。
-
 ## 底层格式
 
 输出是纯 Markdown + YAML frontmatter，人可读、Git 可管、工具可解析：
@@ -52,7 +50,7 @@ Agent：✅ 已生成 viz.html，浏览器打开可看到文档关系图
 https://github.com/KitchSupermonkey/lark-autocontext
 ```
 
-Agent 会 clone 仓库、读取 `SKILL.md`，即可按用户指令操作飞书文档——保存、扫描、同步、查询，所有操作均需用户主动触发且仅访问用户配置的数据源。
+Agent 会 clone 仓库、读取 `SKILL.md`，即可按用户指令操作飞书文档——保存、扫描、同步、查询。
 
 ### 支持的 Agent 平台
 
