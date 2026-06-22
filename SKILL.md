@@ -152,6 +152,22 @@ For each document in the scan result, apply the **Classification Guide** to extr
 ### Step B5: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: batch scan {total} documents to OKF Bundle"`.
 
+### ⚡ 批量处理优化（文档量大时使用 Subagent）
+
+**当扫描结果超过 10 篇文档时**，为避免阻塞主对话，使用 Task tool 启动 subagent 执行批量处理：
+
+```
+Task(subagent_type="general_purpose", query="批量处理飞书文档", description="Batch scan Feishu docs", response_language="Chinese", 
+     task_description="在 lark-autocontext 项目下执行 Workflow B（批量扫描飞书文档）：
+     1. 运行 python scripts/scanner.py 获取文档列表
+     2. 对每篇文档执行 Classification Guide 分类
+     3. 对每篇文档运行 python scripts/okf_writer.py 生成 OKF Markdown
+     4. 运行 git add bundle/ && git commit -m 'docs: batch scan'
+     5. 返回扫描结果摘要：总计/新增/更新/失败数量")
+```
+
+**主对话可以继续响应用户**，subagent 完成后返回结果摘要。
+
 ---
 
 ## Workflow C: Query Context
@@ -209,6 +225,22 @@ Read `.auto_sync/pending_changes.json`. For each entry in `changes`:
 ```
 
 **幂等保证:** 同一 `resource`（doc_token）重跑不会产生重复条目；人工编辑过的 `# Profile` / `# Definition` 区段不会被覆盖。
+
+### ⚡ 批量同步优化（文档量大时使用 Subagent）
+
+**当 pending_changes 超过 10 篇文档时**，为避免阻塞主对话，使用 Task tool 启动 subagent 执行批量同步：
+
+```
+Task(subagent_type="general_purpose", query="批量同步飞书文档", description="Auto-sync Feishu docs", response_language="Chinese",
+     task_description="在 lark-autocontext 项目下执行 Workflow D（自动同步飞书到 bundle）：
+     1. 运行 python scripts/auto_sync.py list-only --config config.json 获取变更列表
+     2. 对每篇变更文档执行 Classification Guide 分类
+     3. 对每篇文档运行 python scripts/okf_writer.py 生成 OKF Markdown
+     4. 运行 python scripts/auto_sync.py finalize --commit
+     5. 返回同步结果摘要：本次同步数量、路径、下次自动跳过未变更文档")
+```
+
+**主对话可以继续响应用户**，subagent 完成后返回结果摘要。
 
 ---
 
