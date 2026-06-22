@@ -99,28 +99,83 @@ Batch scanning requires `scripts/scan_config.json` (copy from `scan_config.json.
 
 **Trigger:** User sends a Feishu doc/sheet link with save intent, or says "保存这个文档 <link>".
 
-### Step A1: Extract Document Content
+### Step A1: Extract Document Content (主对话)
 - Run `python scripts/scanner.py --doc "<url>"`.
 - The script extracts content from Feishu and returns JSON with `source_type`, `doc_token`, `title`, `url`, `content`.
+- **主对话保留 scanner 输出**，作为 subagent 的输入和验收的基准。
 
-### Step A2: Classify Document (AI Classification)
-Read the document content and apply the **Classification Guide** below to extract structured fields.
+### Step A2: Classify Document via Subagent (subagent 执行，主对话验收)
 
-### Step A3: Generate OKF Markdown
-- Construct the classified JSON (see Classification Guide for fields).
-- Run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
-- The script writes the .md file to the Bundle and updates index.md/log.md.
+> **强制规则**：分类必须由 subagent 执行，主对话负责验收。禁止主对话自己分类。
+> 原因：主对话自己分类时容易"走捷径"——不认真读内容、people 填空、key_points 随便写。
+> subagent 独立执行可以确保 LLM 完整读取文档内容并按 Classification Guide 抽取。
 
-### Step A4: Show Save Summary
+**主对话操作**：启动 subagent，传入 scanner 输出的完整 content：
+
+```
+Task(subagent_type="general_purpose_task",
+  description="Classify Feishu doc",
+  query="""你是一个文档分类专家。请对以下飞书文档内容执行分类，严格按照 SKILL.md 的 Classification Guide 输出 JSON。
+
+文档内容：
+---
+{scanner 输出的 content 字段，完整传入}
+---
+
+文档元信息：
+- title: {scanner 输出的 title}
+- url: {scanner 输出的 url}
+- doc_token: {scanner 输出的 doc_token}
+
+要求：
+1. 完整阅读文档内容，不要跳读
+2. 按 Classification Guide 抽取所有字段（type/project/title/description/tags/people/concepts/entities/summary/key_points/decisions/action_items）
+3. people 必须从正文实际出现的人名中提取，不能为空数组（除非文档确实没提到人）
+4. description 必须有实质信息，不能是 "{type} - {title}" 模板
+5. entities 按 §5 的三条判据抽取，宁缺勿滥
+6. 输出纯 JSON，不要包裹在 markdown code block 里""",
+  response_language="Chinese")
+```
+
+### Step A3: 验收分类结果 (主对话执行)
+
+> **强制规则**：主对话必须按以下清单逐项验收，任何一项不通过就打回 subagent 重做。
+
+**验收清单**：
+
+| # | 检查项 | 通过标准 | 不通过处理 |
+|---|--------|---------|-----------|
+| 1 | `type` 非空 | 是 Title Case 名词短语，不是空字符串 | 打回重做 |
+| 2 | `description` 有实质内容 | 不是 `"{type} - {title}"` 模板，不是空 | 打回重做 |
+| 3 | `people` 与正文一致 | 扫描正文出现的人名，与 people 数组比对；如果正文有人名但 people 为空 → 不通过 | 打回重做 |
+| 4 | `tags` ≥ 2 个 | 至少 2 个关键词 | 打回重做 |
+| 5 | `summary` 非空 | 1-3 句摘要 | 打回重做 |
+| 6 | `key_points` ≥ 1 个 | 至少 1 个要点 | 打回重做 |
+| 7 | `entities` 合理 | 每个实体都有 type/name/brief；数量在 0-8 之间 | 打回重做 |
+| 8 | `filename` 合法 | 从 title 派生，无非法字符 | 打回重做 |
+| 9 | `resource` 是有效 URL | 是飞书文档 URL | 打回重做 |
+
+**验收通过后**，主对话将 classified JSON 写入临时文件，进入 A4。
+
+### Step A4: Generate OKF Markdown (主对话执行)
+- 将 classified JSON 写入临时文件 `_classified.json`，raw content 写入 `_content.md`。
+- Run `python scripts/okf_writer.py --classified-file _classified.json --content-file _content.md`。
+- **禁止用位置参数传 JSON**（见 Pitfall #8）。
+- 检查 okf_writer 输出的 JSON，确认 `status: "created"` 或 `"updated"`。
+- 清理临时文件。
+
+### Step A5: Show Save Summary
 ```
 ✅ 已保存到 OKF Bundle
 📄 文件: projects/{project}/{category}/{filename}
 🏷️ 类型: {type}
 📝 描述: {description}
 🔗 来源: {resource}
+👥 人物: {people}
+💡 实体: {entities}
 ```
 
-### Step A5: Commit to Git
+### Step A6: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: save {title} to OKF Bundle"`.
 
 ---
@@ -129,18 +184,64 @@ Read the document content and apply the **Classification Guide** below to extrac
 
 **Trigger:** User says "扫描飞书文档" / "同步飞书知识" / "批量导入".
 
-### Step B1: Run Scanner
+### Step B1: Run Scanner (主对话)
 - Run `python scripts/scanner.py` (reads scan_config.json automatically).
 - The script scans all configured Feishu sources and returns JSON with `documents` array.
+- **主对话保留 scanner 输出**，作为 subagent 输入和验收基准。
 
-### Step B2: Classify Each Document
-For each document in the scan result, apply the **Classification Guide** to extract structured fields.
+### Step B2: Classify All Documents via Subagent (subagent 执行，主对话验收)
 
-### Step B3: Generate OKF Markdown for Each
-- For each classified document, run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
-- Process documents one by one.
+> **强制规则**：分类必须由 subagent 执行，主对话负责验收。禁止主对话自己分类。
+> 批量场景下，subagent 逐篇读取内容并分类，返回 classified JSON 数组。
 
-### Step B4: Show Scan Summary
+**主对话操作**：启动 subagent，传入 scanner 输出的完整 documents 数组：
+
+```
+Task(subagent_type="general_purpose_task",
+  description="Batch classify Feishu docs",
+  query="""你是一个文档分类专家。请对以下飞书文档逐一执行分类，严格按照 SKILL.md 的 Classification Guide 输出 JSON 数组。
+
+文档列表（共 {N} 篇）：
+{scanner 输出的 documents 数组，每篇包含 content/title/url/doc_token}
+
+要求（每篇都必须）：
+1. 完整阅读每篇文档内容，不要跳读
+2. 按 Classification Guide 抽取所有字段
+3. people 必须从正文实际出现的人名中提取
+4. description 必须有实质信息，不能是 "{type} - {title}" 模板
+5. entities 按 §5 三条判据抽取，宁缺勿滥
+6. 输出 JSON 数组，每个元素对应一篇文档，不要包裹在 markdown code block 里""",
+  response_language="Chinese")
+```
+
+### Step B3: 验收分类结果 (主对话执行)
+
+> **强制规则**：主对话必须对每篇分类结果按验收清单逐项检查。
+
+**验收清单**（同 Workflow A Step A3）：
+
+| # | 检查项 | 通过标准 | 不通过处理 |
+|---|--------|---------|-----------|
+| 1 | `type` 非空 | Title Case 名词短语 | 打回该篇重做 |
+| 2 | `description` 有实质内容 | 不是模板、不是空 | 打回该篇重做 |
+| 3 | `people` 与正文一致 | 正文有人名时 people 不能为空 | 打回该篇重做 |
+| 4 | `tags` ≥ 2 个 | 至少 2 个关键词 | 打回该篇重做 |
+| 5 | `summary` 非空 | 1-3 句摘要 | 打回该篇重做 |
+| 6 | `key_points` ≥ 1 个 | 至少 1 个要点 | 打回该篇重做 |
+| 7 | `entities` 合理 | 每个有 type/name/brief，0-8 个 | 打回该篇重做 |
+| 8 | `filename` 合法 | 从 title 派生 | 打回该篇重做 |
+| 9 | `resource` 有效 URL | 飞书文档 URL | 打回该篇重做 |
+
+**全部通过后**，进入 B4。如有不通过，将不通过的篇目重新交给 subagent 重做。
+
+### Step B4: Generate OKF Markdown for Each (主对话执行)
+- 对每篇分类结果：将 classified JSON 写入 `_classified.json`，raw content 写入 `_content.md`。
+- Run `python scripts/okf_writer.py --classified-file _classified.json --content-file _content.md`。
+- **禁止用位置参数传 JSON**（见 Pitfall #8）。
+- 逐篇处理，检查每篇 okf_writer 输出的 `status`。
+- 清理临时文件。
+
+### Step B5: Show Scan Summary
 ```
 ✅ 扫描完成
 📊 总计: {total} 个文档
@@ -149,24 +250,8 @@ For each document in the scan result, apply the **Classification Guide** to extr
 ⚠️ 失败: {failed} 个
 ```
 
-### Step B5: Commit to Git
+### Step B6: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: batch scan {total} documents to OKF Bundle"`.
-
-### ⚡ 批量处理优化（文档量大时使用 Subagent）
-
-**当扫描结果超过 10 篇文档时**，为避免阻塞主对话，使用 Task tool 启动 subagent 执行批量处理：
-
-```
-Task(subagent_type="general_purpose", query="批量处理飞书文档", description="Batch scan Feishu docs", response_language="Chinese", 
-     task_description="在 lark-autocontext 项目下执行 Workflow B（批量扫描飞书文档）：
-     1. 运行 python scripts/scanner.py 获取文档列表
-     2. 对每篇文档执行 Classification Guide 分类
-     3. 对每篇文档运行 python scripts/okf_writer.py 生成 OKF Markdown
-     4. 运行 git add bundle/ && git commit -m 'docs: batch scan'
-     5. 返回扫描结果摘要：总计/新增/更新/失败数量")
-```
-
-**主对话可以继续响应用户**，subagent 完成后返回结果摘要。
 
 ---
 
@@ -201,18 +286,23 @@ When user asks for a specific type (e.g., "给我所有会议纪要"):
 
 **Trigger:** Agent 定时任务调用 / 用户说"扫一遍飞书" / "同步飞书知识".
 
-### Step D1: List Changed Documents
+### Step D1: List Changed Documents (主对话)
 - Run `python scripts/auto_sync.py list-only --config config.json`.
 - This produces `.auto_sync/pending_changes.json` with all changed docs since last sync.
+- 主对话读取变更列表，逐篇调 `scanner.py --doc` 拉取完整内容。
 
-### Step D2: Classify & Write Each Change
-Read `.auto_sync/pending_changes.json`. For each entry in `changes`:
-1. Fetch full content: `python scripts/scanner.py --doc "<url>"` (content is auto-cleaned).
-2. Apply the **Classification Guide** to determine `type`, `project`, `category`, etc.
-3. Run `python scripts/okf_writer.py '<classified_json>' '<raw_content>'`.
-   - People/Concept entities are auto-upserted with preserved `# Profile` / `# Definition` regions.
+### Step D2: Classify via Subagent + 验收 + Write (subagent 分类，主对话验收+写入)
 
-### Step D3: Finalize
+> **强制规则**：同 Workflow A/B，分类必须由 subagent 执行，主对话负责验收。
+> 验收清单同 Workflow A Step A3。
+
+1. **主对话**：对每篇变更文档，调 `python scripts/scanner.py --doc "<url>"` 拉取内容。
+2. **主对话**：启动 subagent 对所有变更文档批量分类（同 Workflow B Step B2 的 Task 调用方式）。
+3. **主对话**：按验收清单（同 A3）逐篇验收，不通过的打回 subagent 重做。
+4. **主对话**：验收通过后，用 `--classified-file` + `--content-file` 调 okf_writer 写入。
+   - People/Concept/entities 自动 upsert，保留 `# Profile` / `# Definition` 区段。
+
+### Step D3: Finalize (主对话)
 - Run `python scripts/auto_sync.py finalize --commit`.
 - This updates `.auto_sync/state.json` watermarks and commits to git.
 
@@ -225,22 +315,6 @@ Read `.auto_sync/pending_changes.json`. For each entry in `changes`:
 ```
 
 **幂等保证:** 同一 `resource`（doc_token）重跑不会产生重复条目；人工编辑过的 `# Profile` / `# Definition` 区段不会被覆盖。
-
-### ⚡ 批量同步优化（文档量大时使用 Subagent）
-
-**当 pending_changes 超过 10 篇文档时**，为避免阻塞主对话，使用 Task tool 启动 subagent 执行批量同步：
-
-```
-Task(subagent_type="general_purpose", query="批量同步飞书文档", description="Auto-sync Feishu docs", response_language="Chinese",
-     task_description="在 lark-autocontext 项目下执行 Workflow D（自动同步飞书到 bundle）：
-     1. 运行 python scripts/auto_sync.py list-only --config config.json 获取变更列表
-     2. 对每篇变更文档执行 Classification Guide 分类
-     3. 对每篇文档运行 python scripts/okf_writer.py 生成 OKF Markdown
-     4. 运行 python scripts/auto_sync.py finalize --commit
-     5. 返回同步结果摘要：本次同步数量、路径、下次自动跳过未变更文档")
-```
-
-**主对话可以继续响应用户**，subagent 完成后返回结果摘要。
 
 ---
 
@@ -434,12 +508,30 @@ bundle/
 
 ## Pitfalls & Lessons Learned
 
+### 🚫 绝对禁止：绕过标准流程
+
+> **核心教训**：标准流程 scanner → Agent AI 分类 → okf_writer 存在的意义是**质量保障**。
+> 每一步都有不可替代的作用：scanner 保证内容提取完整，Agent AI 保证分类准确，okf_writer 保证格式正确。
+> **连续三次想走捷径绕过标准流程，每次都产出垃圾数据。不要做第四次。**
+
+| 禁止行为 | 为什么禁止 | 正确做法 |
+|---------|----------|---------|
+| 硬编码分类信息在脚本里 | LLM 的理解能力被完全浪费，分类质量 = 0 | 走 Workflow A/B 的 AI 分类步骤 |
+| 跳过 scanner 直接调 lark-cli | 拿到的内容未经 clean_feishu_content 清理，HTML 混 Markdown | 用 `scanner.py --doc` 或 `--batch` |
+| 不读文档内容就分类 | people/key_points/decisions 全是空的，图谱无意义 | Agent 必须完整读取 scanner 输出再分类 |
+| 用位置参数传长 JSON 给 okf_writer | 命令行长度限制 + 转义地狱，必然出错 | 用 `--classified-file` + `--content-file` |
+| 不配 scan_config.json 就跑 | 里面还是占位符，scanner 会卡死或报错 | 先从 `.example` 复制并填写真实 token |
+
+### 技术注意事项
+
 1. **Preview Card Rendering**: Use plain text list format, NOT markdown tables. Tables fail to render in Feishu mobile.
 2. **Deduplication**: OKF Writer uses `resource` field (Feishu doc_token) to detect duplicates. Same doc scanned twice = update, not duplicate.
 3. **Filename Safety**: Filenames are sanitized (no `<>:"/\|?*` characters).
 4. **Index Updates**: Every write updates the category's index.md and root log.md automatically.
 5. **Incremental Scan**: Scanner tracks `last_modified` to skip unchanged documents on subsequent scans.
 6. **Windows Encoding**: All scripts force UTF-8 output on Windows to handle Chinese characters and emoji.
+7. **drive files list (not +search)**: `fetch_folder_files` uses `drive files list` API, not `drive +search`. The latter requires `search:docs:read` scope that most users don't have.
+8. **okf_writer 参数传递**: **NEVER** 用位置参数传 classified JSON。必须用 `--classified-file <path>` + `--content-file <path>`。
 
 ## Troubleshooting
 

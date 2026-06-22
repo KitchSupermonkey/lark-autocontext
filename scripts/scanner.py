@@ -36,22 +36,65 @@ def extract_sheet_token(url):
 
 
 def clean_feishu_content(raw: str) -> str:
-    """Clean Feishu private tags and normalize whitespace.
+    """Clean Feishu HTML/private tags and normalize to pure Markdown.
 
-    - <title>X</title> → # X
-    - <callout ...>X</callout> → X
-    - <image .../> → removed entirely
-    - <details ...>X</details> → X
-    - 3+ blank lines → 1 blank line
+    Feishu's markdown export often contains residual HTML tags that would
+    produce mixed HTML+Markdown in OKF files. This function converts or
+    strips them:
+      - <h1>~<h6> → Markdown headings
+      - <strong>/<b> → **bold**
+      - <em>/<i> → *italic*
+      - <p>, <div>, <span> → strip tags, keep content
+      - <br> → newline
+      - <table>/<tr>/<td>/<th> → strip tags, keep text (tab-separated)
+      - <ul>/<ol>/<li> → strip tags, keep text
+      - <cite> → strip tag, keep content
+      - <title> → # heading
+      - <image> → removed
+      - <callout>/<details> → unwrap
     """
     if not raw:
         return raw
+
+    # Headings: <h1>X</h1> → # X, etc.
+    for level in range(1, 7):
+        raw = re.sub(rf'<h{level}[^>]*>(.*?)</h{level}>',
+                     rf'{"#" * level} \1', raw, flags=re.DOTALL)
+
+    # Inline formatting
+    raw = re.sub(r'<(?:strong|b)[^>]*>(.*?)</(?:strong|b)>', r'**\1**', raw, flags=re.DOTALL)
+    raw = re.sub(r'<(?:em|i)[^>]*>(.*?)</(?:em|i)>', r'*\1*', raw, flags=re.DOTALL)
+
+    # Line break
+    raw = re.sub(r'<br\s*/?>', '\n', raw)
+
+    # Table cells: strip tags, keep text (tab-separated for readability)
+    raw = re.sub(r'<t[dh][^>]*>(.*?)</t[dh]>', r'\1\t', raw, flags=re.DOTALL)
+    raw = re.sub(r'</tr>', '\n', raw)
+    raw = re.sub(r'<tr[^>]*>', '', raw)
+    raw = re.sub(r'</?(?:table|thead|tbody|tfoot)[^>]*>', '', raw)
+
+    # Lists: strip tags, keep content with bullet
+    raw = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', raw, flags=re.DOTALL)
+    raw = re.sub(r'</?(?:ul|ol)[^>]*>', '', raw)
+
+    # Block-level containers: unwrap
+    raw = re.sub(r'<(?:p|div|span|cite)[^>]*>(.*?)</(?:p|div|span|cite)>',
+                 r'\1', raw, flags=re.DOTALL)
+
+    # Feishu-specific tags
     raw = re.sub(r'<title>(.*?)</title>', r'# \1', raw, flags=re.DOTALL)
     raw = re.sub(r'<image[^>]*/>', '', raw)
     raw = re.sub(r'<image[^>]*>.*?</image>', '', raw, flags=re.DOTALL)
     raw = re.sub(r'<callout[^>]*>(.*?)</callout>', r'\1', raw, flags=re.DOTALL)
     raw = re.sub(r'<details[^>]*>(.*?)</details>', r'\1', raw, flags=re.DOTALL)
+
+    # Strip any remaining HTML tags we didn't handle above
+    raw = re.sub(r'<[^>]+>', '', raw)
+
+    # Normalize whitespace
     raw = re.sub(r'\n{3,}', '\n\n', raw)
+    raw = re.sub(r'[ \t]+\n', '\n', raw)
     return raw.strip()
 
 

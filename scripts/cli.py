@@ -158,46 +158,53 @@ class LarkCLI:
             return []
 
     def fetch_folder_files(self, folder_token):
-        """Search files in a Feishu folder. Returns list of normalized file dicts."""
-        output = self.run(["drive", "+search", "--folder-tokens", folder_token], as_json=False)
-        try:
-            data = json.loads(output)
-            results = data.get("data", {}).get("results", [])
-            files = []
-            for r in results:
-                meta = r.get("result_meta", {})
-                files.append({
-                    "type": meta.get("doc_types", ""),
-                    "token": meta.get("token", ""),
-                    "name": r.get("title_highlighted", meta.get("token", "")),
-                    "url": meta.get("url", ""),
-                    "modified_time": meta.get("update_time_iso", ""),
-                })
-            return files
-        except:
-            return []
+        """List files in a Feishu folder via drive files list (no search permission needed).
 
-    def fetch_folder_files_since(self, folder_token, since):
-        """Search files edited since `since` in the folder."""
-        args = ["drive", "+search", "--folder-tokens", folder_token,
-                "--edited-since", since]
-        output = self.run(args, as_json=False)
+        Uses the standard Drive API instead of +search (which requires
+        search:docs:read scope that most users don't have).
+        """
+        output = self.run(["drive", "files", "list",
+                           "--folder-token", folder_token,
+                           "--page-all"], as_json=False)
         try:
             data = json.loads(output)
-            results = data.get("data", {}).get("results", [])
+            files_raw = data.get("data", {}).get("files", [])
             files = []
-            for r in results:
-                meta = r.get("result_meta", {})
+            for f in files_raw:
                 files.append({
-                    "type": meta.get("doc_types", ""),
-                    "token": meta.get("token", ""),
-                    "name": r.get("title_highlighted", meta.get("token", "")),
-                    "url": meta.get("url", ""),
-                    "edit_time": meta.get("update_time_iso", ""),
+                    "type": f.get("type", ""),
+                    "token": f.get("token", ""),
+                    "name": f.get("name", f.get("token", "")),
+                    "url": f.get("url", ""),
+                    "modified_time": f.get("modified_time", ""),
                 })
             return files
         except Exception:
             return []
+
+    def fetch_folder_files_since(self, folder_token, since):
+        """List files edited since `since` in the folder.
+
+        Fetches full listing via drive files list, then filters locally by
+        modified_time (Unix timestamp string). `since` may be ISO 8601 or
+        a Unix timestamp string.
+        """
+        all_files = self.fetch_folder_files(folder_token)
+        if not since:
+            return all_files
+
+        # Normalize `since` to a Unix timestamp string for comparison
+        since_ts = str(since)
+        if "T" in str(since) or "-" in str(since):
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+                since_ts = str(int(dt.timestamp()))
+            except Exception:
+                since_ts = "0"
+
+        return [f for f in all_files
+                if str(f.get("modified_time", "0")) >= since_ts]
 
     def fetch_wiki_changed_since(self, space_id, since):
         """Fetch wiki nodes whose underlying docs changed since `since`."""
@@ -215,14 +222,21 @@ class LarkCLI:
         return changed
 
     def fetch_doc_metadata(self, doc_token):
-        """Fetch doc metadata (title, edited_time, etc.) via drive +inspect."""
-        # Get title from drive +inspect
+        """Fetch doc metadata (title, edited_time, etc.) via drive +inspect.
+
+        `drive +inspect` accepts either a full URL or a bare token (with --type).
+        Returns title from the response, trying multiple JSON paths defensively
+        since lark-cli shortcut output format may vary.
+        """
         title = doc_token
         try:
             output = self.run(["drive", "+inspect", "--url", doc_token,
                                "--type", "docx"], as_json=False)
             data = json.loads(output)
-            title = data.get("title", doc_token)
+            # Defensive title extraction: try data.title, then data.data.title
+            title = (data.get("title")
+                     or data.get("data", {}).get("title")
+                     or doc_token)
         except Exception:
             pass
 
