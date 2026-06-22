@@ -34,12 +34,47 @@ def _parse_frontmatter(text):
         except Exception:
             fm = {}
     else:
-        # Fallback: simple key: value parsing
+        # Fallback: simple key: value parsing (used when pyyaml is not installed).
+        # Handles `tags: [a, b, c]` flow sequences so derived edges work.
         for line in m.group(1).splitlines():
             if ":" in line:
                 k, v = line.split(":", 1)
-                fm[k.strip()] = v.strip().strip('"').strip("'")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if v.startswith("[") and v.endswith("]"):
+                    inner = v[1:-1].strip()
+                    fm[k] = [x.strip().strip('"').strip("'")
+                             for x in inner.split(",") if x.strip()] if inner else []
+                else:
+                    fm[k] = v
     return fm, text[m.end():]
+
+
+def _normalize_tags(raw):
+    """Coerce tags into a clean list[str].
+
+    Handles three malformed cases observed in the wild:
+      1. None / "" → []
+      2. "[a, b, c]" (string with brackets, from buggy fallback parser) → ["a","b","c"]
+      3. ["[a, b, c]"] (list containing a single bracketed string) → ["a","b","c"]
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [str(raw)]
+    out = []
+    for item in raw:
+        s = str(item).strip()
+        if s.startswith("[") and s.endswith("]"):
+            inner = s[1:-1].strip()
+            if inner:
+                out.extend(x.strip().strip('"').strip("'")
+                           for x in inner.split(",") if x.strip())
+        elif s:
+            out.append(s.strip('"').strip("'"))
+    return out
 
 
 def extract_links(md_text):
@@ -72,11 +107,9 @@ def scan_bundle_to_graph(bundle_dir):
     """Scan bundle directory, return {nodes, edges}.
     Skips index.md / log.md (directory indices and changelog, not knowledge nodes).
 
-    Edges:
-      - "explicit": frontmatter `mentions` + body markdown links
-      - "tag": derived from shared tags (weak, dashed in UI)
-      - "type": derived from same type (very weak, only when no other edges exist
-                between the pair, to avoid dense clutter)
+    Edges: only "explicit" — frontmatter `mentions` + body markdown links.
+    OKF SPEC §5.3 treats all links as untyped relationships; we do not derive
+    pseudo-edges from shared tags or shared type (those mask true sparsity).
     """
     nodes = []
     explicit_edges = []
@@ -90,9 +123,7 @@ def scan_bundle_to_graph(bundle_dir):
         nid = _norm_id(bundle_dir, md_path)
         title = fm.get("title") or md_path.stem
         ntype = fm.get("type") or "doc"
-        tags = fm.get("tags") or []
-        if not isinstance(tags, list):
-            tags = [str(tags)]
+        tags = _normalize_tags(fm.get("tags"))
         nodes.append({
             "id": nid,
             "label": title,
@@ -100,6 +131,8 @@ def scan_bundle_to_graph(bundle_dir):
             "description": fm.get("description", ""),
             "resource": fm.get("resource", ""),
             "tags": tags,
+            "timestamp": fm.get("timestamp", ""),
+            "project": fm.get("project", ""),
             "path": str(md_path),
             "body": body,
         })
@@ -122,68 +155,11 @@ def scan_bundle_to_graph(bundle_dir):
             seen_explicit.add(key)
             explicit_edges.append({"source": nid, "target": t, "kind": "explicit"})
 
-    derived_edges = _derive_implicit_edges(nodes, seen_explicit)
-    return {"nodes": nodes, "edges": explicit_edges + derived_edges}
-
-
-def _derive_implicit_edges(nodes, seen_explicit):
-    """Derive weak edges from shared tags / same type so a sparse bundle
-    still has visual structure.
-
-    Strategy:
-      1. For each tag, connect all node pairs sharing it as `kind=tag`.
-      2. For each type, if two nodes have NO explicit/tag edge between them,
-         add a `kind=type` edge — but cap per-type to avoid O(N^2) clutter.
-    Both source and target are stored undirected (we emit a single direction
-    deterministically: the lexicographically smaller id first).
-    """
-    derived = []
-    seen_pair = set()
-
-    def _pair_key(a, b):
-        return (a, b) if a < b else (b, a)
-
-    for a, b in seen_explicit:
-        seen_pair.add(_pair_key(a, b))
-
-    # Tag-based edges
-    tag_to_nodes = {}
-    for n in nodes:
-        for tag in n.get("tags", []) or []:
-            tag_to_nodes.setdefault(tag, []).append(n["id"])
-
-    for tag, ids in tag_to_nodes.items():
-        if len(ids) < 2:
-            continue
-        ids = sorted(ids)
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                key = _pair_key(ids[i], ids[j])
-                if key in seen_pair:
-                    continue
-                seen_pair.add(key)
-                derived.append({"source": ids[i], "target": ids[j],
-                                "kind": "tag", "tag": tag})
-
-    # Type-based edges (only if a type has 2-6 nodes; cap to a chain to avoid clutter)
-    type_to_nodes = {}
-    for n in nodes:
-        type_to_nodes.setdefault(n["type"], []).append(n["id"])
-
-    for ntype, ids in type_to_nodes.items():
-        if len(ids) < 2 or len(ids) > 6:
-            continue
-        ids = sorted(ids)
-        # Chain-link (i -> i+1) so we get a backbone, not a clique
-        for i in range(len(ids) - 1):
-            key = _pair_key(ids[i], ids[i + 1])
-            if key in seen_pair:
-                continue
-            seen_pair.add(key)
-            derived.append({"source": ids[i], "target": ids[i + 1],
-                            "kind": "type", "tag": ntype})
-
-    return derived
+    # OKF SPEC §5.3：A link from concept A to B 表达一种 untyped 关系。
+    # 我们只采纳 frontmatter `mentions` + 正文 markdown 链接，不再派生 tag/type 边
+    # ——派生边会产生"伪结构"，掩盖真实的稀疏问题；正确做法是让 Agent 在
+    # 抽取阶段创建真实的 mentions 链接（见 SKILL.md §5）。
+    return {"nodes": nodes, "edges": explicit_edges}
 
 
 def compute_cited_by(graph):
@@ -249,12 +225,41 @@ HTML_TEMPLATE = """<!doctype html>
 </div>
 <script>
 const DATA = __DATA__;
-const COLORS = {
-  meeting:"#4a90e2", decision:"#e25c4a", "action-item":"#f5a623",
-  requirement:"#7ed321", review:"#9013fe", person:"#50e3c2",
-  concept:"#bd10e0", project:"#ff6b9d", doc:"#9b9b9b"
+// 颜色策略（对齐 OKF SPEC：consumer 必须容忍未知 type）
+// 1) 少量明显类别给手动调色板，保证图谱核心节点视觉稳定
+// 2) 其他任何 type 一律走 stableColor() 哈希取色 —— 永远不会"全灰"
+const COLORS_BY_TYPE = {
+  "Person":            "#50e3c2",
+  "Concept":           "#bd10e0",
+  "Project":           "#ff6b9d",
+  "Meeting Minutes":   "#4a90e2",
+  "Requirement Doc":   "#7ed321",
+  "Review Report":     "#9013fe",
+  "Operation Plan":    "#5b8def",
+  "Data Analysis":     "#36c5b0",
+  "Reference":         "#9b9b9b",
+  "Metric":            "#f5a623",
+  "Contract":          "#c97064",
+  "Other":             "#9b9b9b"
 };
-const SIZES = {project:55, person:50, concept:45, decision:42, meeting:40};
+
+// HSL 哈希调色：同一 type 在任何 bundle 里都取同一颜色，可读且去重
+function stableColor(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h) + s.charCodeAt(i);
+    h |= 0;
+  }
+  const hue = Math.abs(h) % 360;
+  // 中等饱和、中等亮度，避免荧光色和死灰
+  return `hsl(${hue}, 62%, 55%)`;
+}
+function colorForType(t) {
+  if (!t) return "#9b9b9b";
+  return COLORS_BY_TYPE[t] || stableColor(t);
+}
+
+const SIZES_BY_TYPE = {"Project":55, "Person":50, "Concept":45, "Meeting Minutes":40};
 
 // Compute node degree (for size scaling)
 const degree = {};
@@ -263,11 +268,31 @@ DATA.edges.forEach(e => {
   degree[e.target] = (degree[e.target]||0) + 1;
 });
 
+// Build enriched two-line label: "Title \n · subtitle"
+// subtitle prefers tags[0..1], falls back to date(timestamp) or project.
+function _shortDate(ts){
+  if(!ts) return "";
+  const m = String(ts).match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : "";
+}
+function _subtitle(n){
+  const tags = (n.tags||[]).filter(Boolean).slice(0,2);
+  if(tags.length) return tags.join(" · ");
+  const d = _shortDate(n.timestamp);
+  if(d) return d;
+  if(n.project) return n.project;
+  return "";
+}
+function _composeLabel(n){
+  const sub = _subtitle(n);
+  return sub ? `${n.label}\n${sub}` : n.label;
+}
+
 const elements = [
   ...DATA.nodes.map(n => ({data:{
-    id:n.id, label:n.label, type:n.type,
-    color: COLORS[n.type] || COLORS.doc,
-    size: (SIZES[n.type] || 38) + Math.min((degree[n.id]||0) * 3, 20),
+    id:n.id, label:_composeLabel(n), title:n.label, type:n.type,
+    color: colorForType(n.type),
+    size: (SIZES_BY_TYPE[n.type] || 38) + Math.min((degree[n.id]||0) * 3, 20),
   }})),
   ...DATA.edges.map(e => ({data:{
     source:e.source, target:e.target,
@@ -298,35 +323,30 @@ const cy = cytoscape({
       "background-color":"data(color)",
       "label":"data(label)",
       "font-size":12, "font-weight":500,
-      "text-wrap":"wrap", "text-max-width":110,
+      "text-wrap":"wrap", "text-max-width":140,
+      "line-height":1.25,
       "text-valign":"center", "text-halign":"right",
-      "text-margin-x":6,
+      "text-margin-x":8,
       "color":"#222",
       "text-background-color":"#fff",
-      "text-background-opacity":0.85,
-      "text-background-padding":2,
+      "text-background-opacity":0.9,
+      "text-background-padding":3,
       "text-background-shape":"roundrectangle",
+      "text-border-width":1,
+      "text-border-color":"#e5e5e5",
+      "text-border-opacity":1,
       "width":"data(size)", "height":"data(size)",
       "border-width":2, "border-color":"#fff",
     }},
     {selector:"node:selected", style:{
       "border-color":"#0969da", "border-width":3,
     }},
+    // Explicit edges: solid + arrow, the strongest visual weight.
     {selector:"edge", style:{
-      "width":1.4, "line-color":"#94a3b8",
-      "target-arrow-color":"#94a3b8",
+      "width":2, "line-color":"#64748b",
+      "target-arrow-color":"#64748b",
       "target-arrow-shape":"triangle",
-      "curve-style":"bezier", "arrow-scale":0.8,
-    }},
-    {selector:'edge[kind = "tag"]', style:{
-      "line-style":"dashed", "line-color":"#cbd5e0",
-      "target-arrow-shape":"none",
-      "width":1, "opacity":0.6,
-    }},
-    {selector:'edge[kind = "type"]', style:{
-      "line-style":"dotted", "line-color":"#e2e8f0",
-      "target-arrow-shape":"none",
-      "width":1, "opacity":0.5,
+      "curve-style":"bezier", "arrow-scale":0.9,
     }},
     {selector:".faded", style:{"opacity":0.12}},
     {selector:"edge.faded", style:{"opacity":0.05}},
@@ -344,11 +364,7 @@ const typeFilter = document.getElementById("type-filter");
   typeFilter.appendChild(opt);
 });
 document.getElementById("stats").textContent =
-  `${DATA.nodes.length} 节点 · ${DATA.edges.length} 边` +
-  (DATA.edges.some(e=>e.kind && e.kind!=="explicit")
-    ? `（含 ${DATA.edges.filter(e=>e.kind && e.kind!=="explicit").length} 条隐式：虚线=同 tag，点线=同 type）`
-    : "") +
-  ` · ${typeSet.size} 类型`;
+  `${DATA.nodes.length} 节点 · ${DATA.edges.length} 边 · ${typeSet.size} 类型`;
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c =>
@@ -368,7 +384,7 @@ function renderDetail(n){
     : '<span class="empty">无</span>';
 
   document.getElementById("detail-container").innerHTML = `
-    <h2>${escapeHtml(n.label)} <span class="type-tag" style="background:${COLORS[n.type]||'#eef'};color:#fff">${escapeHtml(n.type)}</span></h2>
+    <h2>${escapeHtml(n.label)} <span class="type-tag" style="background:${colorForType(n.type)};color:#fff">${escapeHtml(n.type)}</span></h2>
     ${n.description ? `<div class="desc">${escapeHtml(n.description)}</div>` : ''}
     <div class="meta">
       <div><strong>ID:</strong> <code>${escapeHtml(n.id)}</code></div>
@@ -436,9 +452,17 @@ document.getElementById("reset").addEventListener("click", ()=>{
 </script></body></html>"""
 
 
+def _json_default(obj):
+    """JSON encoder fallback: handle datetime objects from YAML parsing."""
+    import datetime
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 def render_html(graph):
     """Render graph to single-file HTML."""
-    return HTML_TEMPLATE.replace("__DATA__", json.dumps(graph, ensure_ascii=False))
+    return HTML_TEMPLATE.replace("__DATA__", json.dumps(graph, ensure_ascii=False, default=_json_default))
 
 
 def main():

@@ -34,8 +34,10 @@ if sys.platform == "win32" and sys.stdout.encoding.lower() not in ("utf-8", "utf
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
-# Type to category directory mapping
-TYPE_TO_CATEGORY = {
+# Type → category directory mapping.
+# OKF SPEC §1 Non-goals 明确不定义固定 taxonomy，所以这里只为少量"工程友好"
+# 的别名兜底，其他 type 一律走 slugify_type() 自动派生目录名。
+TYPE_TO_CATEGORY_ALIASES = {
     "Meeting Minutes": "meetings",
     "Requirement Doc": "requirements",
     "Review Report": "reviews",
@@ -45,8 +47,29 @@ TYPE_TO_CATEGORY = {
     "Contract": "contracts",
     "Reference": "references",
     "Metric": "metrics",
-    "Other": "misc"
+    "Other": "misc",
 }
+
+
+def slugify_type(type_value):
+    """Convert any free-form type value into a filesystem-safe category slug.
+
+    Examples:
+        "Meeting Minutes" -> "meeting-minutes"
+        "ADR"             -> "adr"
+        "Contract Clause" -> "contract-clause"
+        "Postmortem"      -> "postmortem"
+        "实验记录"        -> "实验记录"  (Chinese kept verbatim, only spaces collapsed)
+    """
+    if not type_value:
+        return "misc"
+    if type_value in TYPE_TO_CATEGORY_ALIASES:
+        return TYPE_TO_CATEGORY_ALIASES[type_value]
+    s = str(type_value).strip().lower()
+    s = re.sub(r'[\s_/]+', '-', s)
+    s = re.sub(r'[<>:"\\|?*]', '', s)
+    s = s.strip('-') or "misc"
+    return s
 
 
 def get_bundle_path():
@@ -200,16 +223,27 @@ def _extract_section(text, heading):
 
 
 def _upsert_entity(bundle_path, entity_type, name, mentioned_concept_id,
-                   mentioned_title, mentioned_description, project, timestamp):
-    """Shared upsert logic for Person and Concept entities."""
+                   mentioned_title, mentioned_description, project, timestamp,
+                   dir_slug=None):
+    """Shared upsert logic for atomic entities (Person / Concept / arbitrary).
+
+    Args:
+        dir_slug: Override subdirectory name. When None, defaults are:
+            Person -> "people", Concept -> "concepts",
+            anything else -> slugify_type(entity_type) (plural-ish handled by slugify).
+    """
     if entity_type == "Person":
-        subdir = "people"
+        subdir = dir_slug or "people"
         profile_heading = "# Profile"
-        desc_default = "在 lark-autocontext 知识库中出现的人物档案"
-    else:
-        subdir = "concepts"
+        desc_default = mentioned_description or "在知识库中出现的人物档案"
+    elif entity_type == "Concept":
+        subdir = dir_slug or "concepts"
         profile_heading = "# Definition"
-        desc_default = "业务概念档案"
+        desc_default = mentioned_description or "业务概念档案"
+    else:
+        subdir = dir_slug or slugify_type(entity_type)
+        profile_heading = "# Description"
+        desc_default = mentioned_description or f"{entity_type} 实体档案"
 
     safe_name = _sanitize_entity_name(name)
     if not safe_name:
@@ -460,6 +494,50 @@ def update_log_md(bundle_path, action, file_path, title):
             f.write(f"# Change Log\n\n## {today}\n\n{entry}")
 
 
+def _update_root_types_seen(bundle_path, types_seen):
+    """Maintain the root bundle/index.md, listing all top-level entity dirs.
+
+    OKF SPEC: bundle/index.md is the root navigation. It should enumerate
+    `projects/` plus any atomic-entity directories (people/, concepts/, and
+    any custom slugified types like metrics/, contracts/, ...).
+
+    This function is idempotent: it rewrites the root index based on what
+    actually exists under `bundle_path` plus any newly created `types_seen`.
+    """
+    index_path = os.path.join(bundle_path, "index.md")
+
+    # Discover all entity directories under bundle/ (exclude internal ones).
+    skip = {".git", ".obsidian", "projects"}
+    entity_dirs = []
+    if os.path.isdir(bundle_path):
+        for name in sorted(os.listdir(bundle_path)):
+            full = os.path.join(bundle_path, name)
+            if not os.path.isdir(full):
+                continue
+            if name.startswith(".") or name in skip:
+                continue
+            entity_dirs.append(name)
+
+    # Ensure freshly-seen types are reflected even if dir was just created.
+    for t in types_seen or []:
+        slug = slugify_type(t)
+        if slug and slug not in entity_dirs and os.path.isdir(os.path.join(bundle_path, slug)):
+            entity_dirs.append(slug)
+    entity_dirs = sorted(set(entity_dirs))
+
+    lines = ["# Bundle", ""]
+    if os.path.isdir(os.path.join(bundle_path, "projects")):
+        lines.append("* [Projects](projects/index.md) - 所有项目入口")
+    for d in entity_dirs:
+        sub_index = os.path.join(bundle_path, d, "index.md")
+        link = f"{d}/index.md" if os.path.exists(sub_index) else f"{d}/"
+        lines.append(f"* [{d}]({link})")
+    lines.append("")
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def write_okf_document(classified_data, raw_content=""):
     """
     Write an OKF-compliant Markdown file to the Bundle.
@@ -479,7 +557,9 @@ def write_okf_document(classified_data, raw_content=""):
 
     project = classified_data.get('project', 'misc')
     doc_type = classified_data.get('type', 'Other')
-    category = classified_data.get('category') or TYPE_TO_CATEGORY.get(doc_type, 'misc')
+    # category 由 type 自动派生（OKF SPEC 不预设固定 taxonomy）。
+    # 如果 LLM 显式给了 category，尊重它；否则 slugify。
+    category = classified_data.get('category') or slugify_type(doc_type)
     title = classified_data.get('title', 'Untitled')
     filename = sanitize_filename(classified_data.get('filename', f"{title}.md"))
     description = classified_data.get('description', '')
@@ -519,6 +599,25 @@ def write_okf_document(classified_data, raw_content=""):
                        classified_data.get("project", ""),
                        classified_data.get("edited_time") or classified_data.get("timestamp", ""))
 
+    # Generic atomic-entity upsert (SKILL Classification Guide §5)
+    # entities: [{"type": "Metric", "name": "GMV", "brief": "..."}, ...]
+    extra_types_seen = set()
+    for ent in classified_data.get("entities") or []:
+        if not isinstance(ent, dict):
+            continue
+        ent_type = ent.get("type")
+        ent_name = ent.get("name")
+        if not ent_type or not ent_name:
+            continue
+        ent_brief = ent.get("brief") or ent.get("description") or ""
+        ent_slug = slugify_type(ent_type)
+        _upsert_entity(bundle_path, ent_type, ent_name, concept_id_for_link,
+                       classified_data.get("title", ""), ent_brief,
+                       classified_data.get("project", ""),
+                       classified_data.get("edited_time") or classified_data.get("timestamp", ""),
+                       dir_slug=ent_slug)
+        extra_types_seen.add(ent_type)
+
     # Update index.md in the category directory
     target_dir = os.path.dirname(target_path)
     update_index_md(target_dir, title, filename, description)
@@ -540,6 +639,9 @@ def write_okf_document(classified_data, raw_content=""):
 
     # Update log.md
     update_log_md(bundle_path, action, target_path, title)
+
+    # Maintain root bundle/index.md (lists projects/ + all entity dirs)
+    _update_root_types_seen(bundle_path, extra_types_seen | {"Person", "Concept"})
 
     return {
         "action": action,

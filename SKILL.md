@@ -265,57 +265,112 @@ Task(subagent_type="general_purpose", query="批量同步飞书文档", descript
 
 ## Classification Guide
 
-When you receive document content from the Scanner, analyze it and extract:
+> **设计哲学**：本项目对齐 [OKF SPEC §1 Non-goals](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) —— **不预设固定的 type 词表**。
+> 飞书用户来自各行各业（产品、运营、法务、研究、教育……），任何硬编码的分类都会逼用户把内容塞进不合身的格子。
+> Agent 的职责是 **基于实际内容判断**，并通过"bundle 内复用约束 + consumer 兜底"保持图谱一致。
 
-1. **project**: Which project does this belong to? Infer from:
-   - Document title (e.g., "Lark AutoContext 周会" → project: "lark-autocontext")
-   - Content context (e.g., mentions of specific project names)
-   - Folder/wiki space structure if available
-   - If unclear, ask the user
+When you receive document content from the Scanner, analyze it and produce a JSON with the fields below.
 
-2. **type**: What kind of document is this? Choose from:
-   | type | Use when |
-   |------|----------|
-   | `Meeting Minutes` | Contains meeting notes, attendees, action items |
-   | `Requirement Doc` | Describes features, user stories, acceptance criteria |
-   | `Review Report` | Post-mortem analysis, lessons learned |
-   | `Operation Plan` | Strategy, roadmap, operational procedures |
-   | `Data Analysis` | Charts, metrics analysis, data insights |
-   | `Competitor Research` | Market analysis, competitor comparison |
-   | `Contract` | Agreements, terms, legal documents |
-   | `Reference` | Documentation, guides, how-tos |
-   | `Metric` | Business metrics definitions, KPIs |
-   | `Person` | 文档作者 / 频繁被 `@` 的人（自动入库到 `bundle/people/`） |
-   | `Concept` | 反复出现的术语 / 缩写 / 项目代号（自动入库到 `bundle/concepts/`） |
-   | `Other` | Doesn't fit above categories |
+### 1. project
+Which project does this belong to? Infer from:
+- Document title (e.g., "Lark AutoContext 周会" → `lark-autocontext`)
+- Content context (mentions of specific project names)
+- Folder / wiki space structure if available
+- If unclear, ask the user before writing
 
-3. **Structured fields**: Extract from content:
-   - title: Document title
-   - description: One-sentence summary (meaningful, not mechanical "{type} - {title}")
-   - tags: 2-5 relevant keywords (as array)
-   - people: Names mentioned as participants/authors (as array)
-   - concepts: Key terms / acronyms / project codenames (as array)
-   - summary: 1-3 sentence summary of the document
-   - key_points: Main takeaways (as array of strings)
-   - decisions: For Meeting Minutes / Review Reports (as array of {"decision","owner","deadline"})
-   - action_items: For Meeting Minutes / Requirement Docs (as array of {"task","owner","due"})
-   - filename: Generate from title, e.g., "2026-06-20 重构讨论" → "2026-06-20-重构讨论.md"
-   - resource: The original Feishu document URL (for traceability and deduplication)
-   - edited_time: Real edit timestamp from Feishu (used as `timestamp` in frontmatter)
+### 2. type — **open vocabulary, soft-constrained**
 
-4. **category**: Auto-derived from type:
-   | type | category |
-   |------|----------|
-   | Meeting Minutes | meetings |
-   | Requirement Doc | requirements |
-   | Review Report | reviews |
-   | Operation Plan | plans |
-   | Data Analysis | analysis |
-   | Competitor Research | research |
-   | Contract | contracts |
-   | Reference | references |
-   | Metric | metrics |
-   | Other | misc |
+`type` 是 OKF SPEC 唯一必填的 frontmatter 字段。它的值应该：
+
+- **2–4 个词的英文 Title Case 或 PascalCase 名词短语**（例如：`Meeting Minutes`、`Design Doc`、`ADR`、`Postmortem`、`Runbook`、`Policy`、`Research Note`、`Contract Clause`）
+- 描述"**这是什么**"，不描述"它属于哪个项目"（项目用 `project` 字段表达）
+- **跨文档可复用**：同一类内容必须给同一个 `type` 值
+
+#### 优先复用已有 type（强约束）
+
+写入前**先读取** `bundle/index.md` 的 frontmatter，里面有 `types_seen: [...]` 列表（由 okf_writer 自动维护）。
+
+- 如果当前文档**完全可以匹配**已有 type，**必须复用**——不要用同义词造新值（不要今天写 `Meeting Minutes`、明天写 `Meeting Note` 或 `会议纪要`）。
+- 只有当文档**确实属于一个新类别**，且这个类别**预计未来还会重复出现**时，才创造新 type。
+
+#### 何时该创造新 type
+
+- 法务用户首次导入合同条款 → 可以创造 `Contract Clause` / `Legal Opinion`
+- 研究用户首次导入实验记录 → 可以创造 `Experiment Log` / `Dataset Card` / `Finding`
+- 教育用户首次导入教案 → 可以创造 `Lesson Plan` / `Rubric`
+
+#### 常见 type 参考（**非穷举、非强制**，仅作为命名风格参考）
+
+| 场景 | 常见 type 候选 |
+|------|---------------|
+| 通用协作 | `Meeting Minutes`, `Requirement Doc`, `Design Doc`, `Review Report`, `Operation Plan` |
+| 工程研发 | `ADR`, `Runbook`, `Postmortem`, `API Reference`, `Tech Spec` |
+| 数据/分析 | `Data Analysis`, `Metric`, `Dataset Card`, `Dashboard Note` |
+| 法务/合规 | `Contract`, `Contract Clause`, `Policy`, `Legal Opinion` |
+| 研究 | `Research Note`, `Experiment Log`, `Hypothesis`, `Finding`, `Reference` |
+| 实体节点（跨文档） | `Person`, `Concept`, `Project`, `Product`, `Feature` |
+
+不要**强行**把内容塞进上表。表里没有的，按上面的命名规则自己起。
+
+### 3. Structured fields (extract from content)
+
+| 字段 | 说明 |
+|------|------|
+| `title` | 文档标题 |
+| `description` | 一句话摘要，必须有实质信息，不能是 `"{type} - {title}"` 这种机械模板 |
+| `tags` | 2–5 个关键词（array），用于过滤和搜索 |
+| `people` | 文中出现的真实人名（array） |
+| `concepts` | 反复出现的术语 / 缩写 / 代号（array） |
+| `summary` | 1–3 句正文摘要 |
+| `key_points` | 主要要点（array of string） |
+| `decisions` | 仅当文档包含明确决议时填，结构 `{decision, owner, deadline}` |
+| `action_items` | 仅当文档包含可追踪行动项时填，结构 `{task, owner, due}` |
+| `filename` | 从 title 派生，例如 `"2026-06-20 重构讨论"` → `"2026-06-20-重构讨论.md"` |
+| `resource` | 原飞书文档 URL（用于去重和回溯） |
+| `edited_time` | 飞书原始编辑时间（写入 frontmatter 的 `timestamp`） |
+
+### 4. category — auto-derived (不需要 LLM 决定)
+
+`category` 由 okf_writer 根据 `type` 自动 slugify：
+- `Meeting Minutes` → `meeting-minutes`
+- `ADR` → `adr`
+- `Contract Clause` → `contract-clause`
+
+写出到 `bundle/projects/{project}/{category}/{filename}`。Agent **不需要**显式输出 `category`，传了也会被覆盖。
+
+### 5. Atomic Entities — second-pass extraction (核心增强)
+
+> 这一步是让图谱"活起来"的关键。**不要只把文档本身当节点**，要把文档里出现的**跨文档复用实体**也升格为独立的 OKF 文件。
+
+扫描文档正文，识别出**值得独立成节点**的原子实体。判断标准（三条全部满足）：
+
+1. **跨文档复用可能性高**——这个实体**很可能**在其他文档里被再次提到
+2. **有自己的属性**——不只是一个标签词，而是有定义/描述/关系的东西
+3. **独立于当前文档存在**——脱离当前文档后仍然有意义
+
+**type 由你自己定**（同样遵循"开放 + 复用"原则）。一些示例（**非穷举**）：
+
+| 用户类型 | 可能抽取出的实体 type |
+|---------|---------------------|
+| 产品/运营 | `Person`, `Concept`, `Project`, `Product`, `Feature`, `Metric` |
+| 法务 | `Person`, `Party`, `Contract`, `Clause` |
+| 研究 | `Person`, `Concept`, `Dataset`, `Hypothesis`, `Finding`, `Reference` |
+| 工程 | `Person`, `Service`, `API`, `Library`, `Incident` |
+
+对每个抽取出的实体，在最终 JSON 里**直接用对应字段表达**：
+- `people: [...]` 会被自动 upsert 为 `bundle/people/{name}.md`
+- `concepts: [...]` 会被自动 upsert 为 `bundle/concepts/{name}.md`
+- 其他自定义实体类型，写入 `entities` 字段（见下方扩展示例），okf_writer 会自动 upsert 到 `bundle/{slug(type)}/{name}.md`
+
+```json
+"entities": [
+  {"type": "Metric", "name": "GMV", "brief": "总成交额，运营核心指标"},
+  {"type": "Feature", "name": "智能推荐 v2", "brief": "..."},
+  {"type": "Project", "name": "618 大促", "brief": "..."}
+]
+```
+
+**重要**：实体抽取宁缺勿滥。每篇文档的 `entities` 应保持在 0–8 个之间，只挑**真正会被复用**的。把所有名词都升格为节点 = 退化成另一种"灰球海"。
 
 ### OKF Body Structure (7 Sections)
 
@@ -335,15 +390,26 @@ All documents follow this body structure (sections are omitted when empty):
 {
   "project": "lark-autocontext",
   "type": "Meeting Minutes",
-  "category": "meetings",
   "title": "2026-06-20 重构讨论",
-  "description": "讨论 OKF 重构方案",
-  "tags": ["重构", "OKF"],
+  "description": "讨论 OKF taxonomy 开放化与 Agent 自决实体抽取方案",
+  "tags": ["重构", "OKF", "taxonomy"],
   "people": ["张三", "李四"],
-  "key_dates": [{"date": "2026-06-20", "event": "方案确定"}],
-  "core_conclusion": "采用 Pipeline 架构，OKF 为主存储",
+  "concepts": ["OKF", "taxonomy"],
+  "entities": [
+    {"type": "Project", "name": "Lark AutoContext", "brief": "飞书知识库自动归档项目"},
+    {"type": "Metric", "name": "节点图谱密度", "brief": "可视化质量指标"}
+  ],
+  "summary": "团队决定放弃硬编码 type 词表，改为 Agent 基于内容自决",
+  "key_points": ["对齐 OKF SPEC 开放性原则", "bundle 自描述 types_seen 列表"],
+  "decisions": [
+    {"decision": "采用开放 type + 软约束方案", "owner": "张三", "deadline": "2026-06-25"}
+  ],
+  "action_items": [
+    {"task": "重写 SKILL.md Classification Guide", "owner": "李四", "due": "2026-06-22"}
+  ],
   "filename": "2026-06-20-重构讨论.md",
-  "resource": "https://feishu.cn/docx/abc123"
+  "resource": "https://feishu.cn/docx/abc123",
+  "edited_time": "2026-06-20T15:00:00+08:00"
 }
 ```
 
