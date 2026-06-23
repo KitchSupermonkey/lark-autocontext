@@ -538,6 +538,33 @@ def _update_root_types_seen(bundle_path, types_seen):
         f.write("\n".join(lines))
 
 
+def _auto_visualize(bundle_path):
+    """Auto-generate viz.html after each write. Non-blocking.
+
+    Returns the relative path to viz.html on success, or None on failure.
+    Failures are logged to stderr but do not break the write operation.
+    """
+    try:
+        import subprocess
+        viz_path = os.path.join(bundle_path, "viz.html")
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        visualize_script = os.path.join(scripts_dir, "visualize.py")
+        r = subprocess.run(
+            [sys.executable, visualize_script,
+             "--bundle", bundle_path, "--out", viz_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if r.returncode == 0:
+            return os.path.relpath(viz_path, bundle_path)
+        else:
+            print(f"[okf_writer] visualize warning: {r.stderr.strip()}",
+                  file=sys.stderr)
+            return None
+    except Exception as e:
+        print(f"[okf_writer] visualize skipped: {e}", file=sys.stderr)
+        return None
+
+
 def write_okf_document(classified_data, raw_content=""):
     """
     Write an OKF-compliant Markdown file to the Bundle.
@@ -643,11 +670,16 @@ def write_okf_document(classified_data, raw_content=""):
     # Maintain root bundle/index.md (lists projects/ + all entity dirs)
     _update_root_types_seen(bundle_path, extra_types_seen | {"Person", "Concept"})
 
+    # Auto-generate viz.html so the user always has a fresh visual output
+    # after each write. Non-blocking: failures are logged but don't break the write.
+    viz_path = _auto_visualize(bundle_path)
+
     return {
         "action": action,
         "file_path": os.path.relpath(target_path, bundle_path),
         "absolute_path": target_path,
-        "title": title
+        "title": title,
+        "viz_html": viz_path,
     }
 
 

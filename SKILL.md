@@ -173,7 +173,9 @@ Task(subagent_type="general_purpose_task",
 🔗 来源: {resource}
 👥 人物: {people}
 💡 实体: {entities}
+📊 可视化: viz.html (已自动更新)
 ```
+> okf_writer 每次写入后会自动重新生成 viz.html，无需手动触发。
 
 ### Step A6: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: save {title} to OKF Bundle"`.
@@ -248,7 +250,9 @@ Task(subagent_type="general_purpose_task",
 🆕 新增: {created} 个
 🔄 更新: {updated} 个
 ⚠️ 失败: {failed} 个
+📊 可视化: viz.html (已自动更新)
 ```
+> okf_writer 每次写入后会自动重新生成 viz.html，无需手动触发。
 
 ### Step B6: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: batch scan {total} documents to OKF Bundle"`.
@@ -311,8 +315,10 @@ When user asks for a specific type (e.g., "给我所有会议纪要"):
 ✅ 同步完成
 📊 本次: {N} 篇文档
 📁 路径: bundle/projects/...
+📊 可视化: viz.html (已自动更新)
 ⏭️  下次自动跳过未变更文档
 ```
+> okf_writer 每次写入后会自动重新生成 viz.html，无需手动触发。
 
 **幂等保证:** 同一 `resource`（doc_token）重跑不会产生重复条目；人工编辑过的 `# Profile` / `# Definition` 区段不会被覆盖。
 

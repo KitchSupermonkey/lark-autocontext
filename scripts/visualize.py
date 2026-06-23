@@ -159,7 +159,13 @@ def scan_bundle_to_graph(bundle_dir):
     # 我们只采纳 frontmatter `mentions` + 正文 markdown 链接，不再派生 tag/type 边
     # ——派生边会产生"伪结构"，掩盖真实的稀疏问题；正确做法是让 Agent 在
     # 抽取阶段创建真实的 mentions 链接（见 SKILL.md §5）。
-    return {"nodes": nodes, "edges": explicit_edges}
+
+    # 过滤掉引用不存在节点的边（target 指向 index.md / 已删除文件 / 外部链接）
+    # 否则 cytoscape 初始化时会因找不到目标节点而报错
+    node_ids = {n["id"] for n in nodes}
+    valid_edges = [e for e in explicit_edges
+                   if e["source"] in node_ids and e["target"] in node_ids]
+    return {"nodes": nodes, "edges": valid_edges}
 
 
 def compute_cited_by(graph):
@@ -175,9 +181,6 @@ def compute_cited_by(graph):
 HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>OKF Bundle Visualizer</title>
 <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
-<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
-<script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   *{box-sizing:border-box}
@@ -301,10 +304,15 @@ const elements = [
   }})),
 ];
 
-const hasBilkent = (typeof cytoscape !== "undefined") &&
-                   cytoscape.prototype && cytoscape("layout","cose-bilkent");
-// cose-bilkent params tuned for sparse Chinese-label bundles:
-// large nodeRepulsion + idealEdgeLength prevents label collision.
+// 检测 cose-bilkent 是否可用（try/catch 防止插件未加载时抛异常中断 JS）
+let hasBilkent = false;
+try {
+  hasBilkent = (typeof cytoscape !== "undefined") &&
+               cytoscape.prototype && cytoscape("layout","cose-bilkent");
+} catch (e) {
+  hasBilkent = false;
+}
+// 布局配置：优先 cose-bilkent，不可用时 fallback 到内置 cose
 const layoutCfg = hasBilkent
   ? {name:"cose-bilkent", animate:false, randomize:true,
      idealEdgeLength:180, nodeRepulsion:24000, edgeElasticity:0.45,
