@@ -565,17 +565,48 @@ def _auto_visualize(bundle_path):
         return None
 
 
+def _check_subagent_signature(classified_data):
+    """Warn if classified JSON lacks the subagent signature.
+
+    Per SKILL.md 铁律 1, classification MUST be done by a subagent, not the
+    main conversation. Subagents are instructed to include
+    `"_classified_by": "subagent"` in their output. If this field is missing,
+    the classification was likely done by the main conversation (violation).
+
+    This is a non-blocking warning: we still write the file, but the warning
+    makes the violation visible in logs for later auditing.
+    """
+    sig = classified_data.get("_classified_by") if isinstance(classified_data, dict) else None
+    if sig != "subagent":
+        print(
+            "\n"
+            "⚠️⚠️⚠️ [okf_writer] SUBAGENT SIGNATURE MISSING ⚠️⚠️⚠️\n"
+            "  classified JSON does not contain `_classified_by: \"subagent\"`.\n"
+            "  This likely means classification was done by the main conversation,\n"
+            "  which violates SKILL.md 铁律 1 (分类必须由 subagent 执行).\n"
+            "  → Classification quality is NOT guaranteed.\n"
+            "  → Please re-run with proper subagent classification.\n"
+            "  See SKILL.md '🛑 STOP — 执行前必读' section.\n"
+            "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️\n",
+            file=sys.stderr
+        )
+
+
 def write_okf_document(classified_data, raw_content=""):
     """
     Write an OKF-compliant Markdown file to the Bundle.
 
     Args:
         classified_data: Dict with project, type, title, tags, etc.
+            Must contain `_classified_by: "subagent"` per SKILL.md 铁律 1.
         raw_content: Original document content from Scanner
 
     Returns:
         Dict with file_path and action (created/updated)
     """
+    # Subagent signature check (SKILL.md 铁律 1 enforcement)
+    _check_subagent_signature(classified_data)
+
     bundle_path = get_bundle_path()
 
     # Ensure bundle exists

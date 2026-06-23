@@ -29,6 +29,93 @@ description: |
 
 Only after ALL 4 checks pass, proceed to the requested workflow.
 
+---
+
+## 🛑 STOP — 执行前必读 (HARD CONSTRAINTS)
+
+> **此节为最高优先级硬约束，凌驾于所有 Workflow 描述之上。**
+> **任何 Workflow (A/B/C/D) 在执行分类步骤前，必须先满足以下三条铁律。**
+> **违反任何一条 = 执行失败，必须回滚重来。**
+
+### 铁律 1: 分类必须由 subagent 执行，主对话禁止自己分类
+
+```
+禁止行为（一旦出现即判定违规）：
+  ❌ 主对话根据文档标题/片段自己写 classified JSON
+  ❌ 主对话"为了快"跳过 Task() 调用直接分类
+  ❌ 主对话用 grep/扫描前 200 字代替完整阅读
+  ❌ subagent 只看 title 不读 content 字段
+
+正确行为：
+  ✅ 主对话调用 Task(subagent_type="general_purpose_task", ...)
+  ✅ Task prompt 中必须包含 scanner 输出的完整 content 字段
+  ✅ subagent 逐篇读取 content 全文后输出 classified JSON
+  ✅ subagent 输出必须包含 `"_classified_by": "subagent"` 签名字段
+  ✅ 主对话只负责传参和验收，不参与内容判断
+  ✅ okf_writer 会校验签名，缺失时打印警告（见 scripts/okf_writer.py _check_subagent_signature）
+```
+
+**为什么**：主对话上下文已被多轮对话污染，容易基于标题/片段臆测。
+subagent 拥有独立、干净的上下文窗口，能完整阅读长文档并按 Classification Guide 抽取。
+
+### 铁律 2: 主对话必须按 9 项验收清单逐项检查，禁止跳过
+
+subagent 返回 classified JSON 后，主对话**必须**对每一篇文档执行以下检查。
+**任何一项不通过 → 打回 subagent 重做，禁止"差不多就放行"。**
+
+```
+验收清单 (9 项全过才算合格):
+  1. type 非空, Title Case 名词短语 (如 "Meeting Minutes", 不是 "meeting"/"会议")
+  2. description 有实质内容 (≥ 10 字, 不是 "本文档是关于..." 模板)
+  3. people 与正文实际出现的人名一致 (不多不少)
+  4. tags ≥ 2 个, 且与内容相关 (不是 ["文档", "飞书"] 这种万能 tag)
+  5. summary 非空 (≥ 20 字, 概括核心结论)
+  6. key_points ≥ 1 个 (每个 point 是具体信息, 不是 "本文讨论了 X")
+  7. entities 合理 (0-8 个, 每个必须有 type/name/brief 三字段)
+  8. filename 合法 (slug, 无空格中文特殊字符, .md 结尾)
+  9. resource 是有效飞书 URL (https://feishu.cn/... 或 https://*.feishu.cn/...)
+```
+
+**验收输出格式**（主对话必须显式打印，便于追溯）：
+```
+[验收] 文档 1/3: <title>
+  ✅ type: Meeting Minutes
+  ✅ description: 142 字
+  ✅ people: 3 人 (张三, 李四, 王五)
+  ✅ tags: 3 个 (季度规划, OKR, 销售部)
+  ✅ summary: 87 字
+  ✅ key_points: 4 个
+  ✅ entities: 2 个
+  ✅ filename: 2024-q4-okr-review.md
+  ✅ resource: https://xxx.feishu.cn/docs/xxx
+  → 通过
+```
+
+### 铁律 3: 禁止任何形式的"绕过"
+
+| 错误做法 | 为什么错 | 正确做法 |
+|---------|---------|---------|
+| "文档太短不用 subagent" | 短文档也需要按规范抽取 | 仍调 subagent, prompt 里说明文档较短 |
+| "批量太多 subagent 慢" | 慢是正常的, 准确性 > 速度 | 仍调 subagent, 可分批 Task() |
+| "我自己看一眼就能分" | 主对话上下文已被污染 | 必须用独立 subagent 上下文 |
+| "验收太繁琐跳过吧" | 不验收 = 不可信 | 必须逐项打印验收结果 |
+| "subagent 返回就直接写" | 返回 ≠ 合格 | 必须先验收, 通过后才调 okf_writer |
+| "用 okf_writer 不带 --classified-file" | 等于让 writer 自己猜分类 | 必须先 subagent 分类, 再 --classified-file 传入 |
+
+### 自检 checklist (执行任何 Workflow 前, 主对话必须默念确认)
+
+```
+□ 我即将调用 Task() 启动 subagent, 而不是自己分类
+□ 我会把 scanner 输出的完整 content 传给 subagent
+□ subagent 返回后, 我会按 9 项清单逐项验收
+□ 验收通过前, 我不会调用 okf_writer
+□ okf_writer 调用会带 --classified-file 参数
+```
+
+**如以上任何一项无法确认 → STOP, 重新阅读对应 Workflow 章节。**
+
+---
+
 ## 🎯 Quick Start (首次使用引导)
 
 **When this skill is triggered for the first time** (config.json missing or bundle not initialized):
@@ -182,7 +269,8 @@ Task(subagent_type="general_purpose_task",
 3. people 必须从正文实际出现的人名中提取，不能为空数组（除非文档确实没提到人）
 4. description 必须有实质信息，不能是 "{type} - {title}" 模板
 5. entities 按 §5 的三条判据抽取，宁缺勿滥
-6. 输出纯 JSON，不要包裹在 markdown code block 里""",
+6. 输出纯 JSON，不要包裹在 markdown code block 里
+7. 必须在 JSON 中包含 `"_classified_by": "subagent"` 字段（okf_writer 会校验此签名，缺失会触发警告）""",
   response_language="Chinese")
 ```
 
@@ -261,7 +349,8 @@ Task(subagent_type="general_purpose_task",
 3. people 必须从正文实际出现的人名中提取
 4. description 必须有实质信息，不能是 "{type} - {title}" 模板
 5. entities 按 §5 三条判据抽取，宁缺勿滥
-6. 输出 JSON 数组，每个元素对应一篇文档，不要包裹在 markdown code block 里""",
+6. 输出 JSON 数组，每个元素对应一篇文档，不要包裹在 markdown code block 里
+7. 每个 JSON 元素必须包含 `"_classified_by": "subagent"` 字段（okf_writer 会校验此签名，缺失会触发警告）""",
   response_language="Chinese")
 ```
 

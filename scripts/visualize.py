@@ -468,9 +468,55 @@ def _json_default(obj):
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
+# Inline version of HTML_TEMPLATE with JS libraries embedded directly
+# (for offline / file:// protocol support)
+HTML_TEMPLATE_INLINE = HTML_TEMPLATE.replace(
+    '<script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>',
+    '<script>__CYTOSCAPE_JS__</script>'
+).replace(
+    '<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>',
+    '<script>__MARKED_JS__</script>'
+)
+
+
+# Cache for downloaded JS libraries (avoid re-downloading on every render)
+_JS_CACHE = {}
+
+def _fetch_js(url):
+    """Fetch JS library content with caching. Falls back to CDN <script> tag on failure."""
+    if url in _JS_CACHE:
+        return _JS_CACHE[url]
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("utf-8")
+        _JS_CACHE[url] = content
+        return content
+    except Exception:
+        # Fallback: use CDN script tag (requires internet to view)
+        _JS_CACHE[url] = None
+        return None
+
+
 def render_html(graph):
-    """Render graph to single-file HTML."""
-    return HTML_TEMPLATE.replace("__DATA__", json.dumps(graph, ensure_ascii=False, default=_json_default))
+    """Render graph to single-file HTML.
+
+    JS libraries (cytoscape, marked) are inlined for offline viewing.
+    Falls back to CDN <script> tags if download fails.
+    """
+    cyto_js = _fetch_js("https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js")
+    marked_js = _fetch_js("https://cdn.jsdelivr.net/npm/marked/marked.min.js")
+
+    if cyto_js and marked_js:
+        # Both libraries downloaded successfully — inline them for offline use
+        html = HTML_TEMPLATE_INLINE.replace("__CYTOSCAPE_JS__", cyto_js)
+        html = html.replace("__MARKED_JS__", marked_js)
+    else:
+        # Fallback: use CDN script tags (requires internet)
+        html = HTML_TEMPLATE
+
+    return html.replace("__DATA__", json.dumps(graph, ensure_ascii=False, default=_json_default))
 
 
 def main():
