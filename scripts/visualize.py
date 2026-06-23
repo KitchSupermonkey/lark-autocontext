@@ -479,13 +479,43 @@ HTML_TEMPLATE_INLINE = HTML_TEMPLATE.replace(
 )
 
 
-# Cache for downloaded JS libraries (avoid re-downloading on every render)
+# Local JS library paths (bundled in scripts/lib/)
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+
+# Map CDN URLs to local filenames
+_LOCAL_JS_FILES = {
+    "https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js": "cytoscape.min.js",
+    "https://cdn.jsdelivr.net/npm/marked/marked.min.js": "marked.min.js",
+}
+
+# Cache for loaded JS libraries (avoid re-reading on every render)
 _JS_CACHE = {}
 
 def _fetch_js(url):
-    """Fetch JS library content with caching. Falls back to CDN <script> tag on failure."""
+    """Load JS library content: local file first, then CDN fallback.
+
+    Priority:
+    1. Read from scripts/lib/ (bundled, no network needed)
+    2. Download from CDN (requires network)
+    3. Return None (caller falls back to CDN <script> tag)
+    """
     if url in _JS_CACHE:
         return _JS_CACHE[url]
+
+    # Try local bundled file first
+    local_filename = _LOCAL_JS_FILES.get(url)
+    if local_filename:
+        local_path = os.path.join(_LIB_DIR, local_filename)
+        if os.path.exists(local_path):
+            try:
+                with open(local_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                _JS_CACHE[url] = content
+                return content
+            except Exception:
+                pass
+
+    # Fallback: download from CDN
     try:
         import urllib.request
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -494,7 +524,6 @@ def _fetch_js(url):
         _JS_CACHE[url] = content
         return content
     except Exception:
-        # Fallback: use CDN script tag (requires internet to view)
         _JS_CACHE[url] = None
         return None
 
