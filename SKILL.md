@@ -46,31 +46,80 @@ Show the user this onboarding card **before any other action**:
 
 方式 1️⃣  保存单文档
   直接发文档链接 + "帮我存一下" / "保存到上下文"
-  → 自动提取 → AI分类 → 生成OKF Markdown → 入库
+  → 自动提取 → AI分类 → 生成OKF Markdown → 入库 → 自动更新可视化
 
 方式 2️⃣  批量扫描
   "扫描飞书文档" / "同步飞书知识"
-  → 批量提取 → AI分类 → 生成OKF Markdown → 入库
+  → 批量提取 → AI分类 → 生成OKF Markdown → 入库 → 自动更新可视化
 
 方式 3️⃣  查询上下文
   "XX 项目里关于优惠券做了什么决策？"
   → 查询OKF Bundle → 返回结果
 
+方式 4️⃣  可视化
+  打开 bundle/viz.html 查看知识图谱
+  → 节点 = 文档/人物/概念/实体，边 = 交叉引用
+
 ━━━━━━━━━━━━━━━━━━━━━━
 
-⚡ **首次使用：需要初始化**
+⚡ **首次使用需要初始化，我会自动帮你搞定一切：**
 
-我将为你自动创建 OKF Bundle 目录来存储知识。
-确认后输入 ✅ 或 "开始"，我会自动完成。
+1. 检查 lark-cli 是否安装并登录飞书
+2. 创建配置文件（不需要你手动编辑 JSON）
+3. 初始化 OKF Bundle 知识库目录
+
+唯一前提：需要先安装 lark-cli（飞书命令行工具）
+  npm install -g @larksuiteoapi/lark-cli
+
+确认后输入 ✅ 或 "开始"，我来完成剩下的。
 ```
 
-**After user confirms**, run `python scripts/init_bundle.py` automatically and show:
+**After user confirms**, the Agent runs `python scripts/setup.py` automatically.
+
+> **setup.py 会自动完成：**
+> 1. 检查 lark-cli 安装状态和飞书登录状态
+> 2. 从 example 复制 config.json（无需手动填 token，认证通过 lark-cli 完成）
+> 3. 交互式创建 scan_config.json（用户粘贴飞书文件夹/wiki URL，脚本自动提取 token）
+> 4. 初始化 OKF Bundle 目录结构
+>
+> **用户不需要手动编辑任何 JSON 文件。**
+
+**If lark-cli not installed:**
 ```
-✅ OKF Bundle 已初始化！
-📝 现在可以开始保存上下文了。
+⚠️ 需要先安装 lark-cli（飞书命令行工具）：
+  npm install -g @larksuiteoapi/lark-cli
+  lark-cli auth login --recommend --no-wait
+安装并登录后告诉我，我继续初始化。
+```
+
+**If lark-cli not logged in:**
+```
+⚠️ lark-cli 还没登录飞书，需要先授权：
+  lark-cli auth login --recommend --no-wait
+在浏览器完成授权后告诉我，我继续初始化。
+```
+
+**After setup.py succeeds**, show:
+```
+✅ 初始化完成！
+📦 OKF Bundle 已就绪
+📊 可视化: bundle/viz.html (每次写入自动更新)
+📝 现在可以开始保存上下文了
 ```
 
 Then **wait for the user's next message**.
+
+### Agent 自动化初始化（非交互模式）
+
+当 Agent 需要在非交互场景下初始化时（如安装后自动执行）：
+
+```bash
+# 不带扫描源（后续用户发链接时再添加）
+python scripts/setup.py --auto
+
+# 带扫描源（用户已经提供了飞书 URL）
+python scripts/setup.py --auto --sources "https://xxx.feishu.cn/drive/folder/ABC123" "https://xxx.feishu.cn/wiki/DEF456"
+```
 
 ---
 
