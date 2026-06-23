@@ -374,12 +374,25 @@ Task(subagent_type="general_purpose_task",
 
 **全部通过后**，进入 B4。如有不通过，将不通过的篇目重新交给 subagent 重做。
 
-### Step B4: Generate OKF Markdown for Each (主对话执行)
-- 对每篇分类结果：将 classified JSON 写入 `_classified.json`，raw content 写入 `_content.md`。
-- Run `python scripts/okf_writer.py --classified-file _classified.json --content-file _content.md`。
-- **禁止用位置参数传 JSON**（见 Pitfall #8）。
-- 逐篇处理，检查每篇 okf_writer 输出的 `status`。
-- 清理临时文件。
+### Step B4: Batch Write All Documents (主对话执行)
+
+> **批量模式**：使用 `--batch-file` 一次性写入所有文档，viz.html 只在最后生成一次（不是每篇都生成）。
+
+**主对话操作**：
+1. 将验收通过的 classified JSON 数组 + 对应 raw_content 组装成批量文件 `_batch.json`：
+   ```json
+   [
+     {"classified": {...}, "raw_content": "..."},
+     {"classified": {...}, "raw_content": "..."}
+   ]
+   ```
+2. Run `python scripts/okf_writer.py --batch-file _batch.json`
+3. 检查输出的 `batch_count` 和 `results` 数组，确认每篇 `action` 为 `Creation` 或 `Update`。
+4. 清理临时文件 `_batch.json`。
+
+> **性能对比**：
+> - 旧方式（逐篇）：10 篇 = 10 次 Python 启动 + 10 次 viz.html 生成
+> - 新方式（批量）：10 篇 = 1 次 Python 启动 + 1 次 viz.html 生成
 
 ### Step B5: Show Scan Summary
 ```
@@ -390,7 +403,7 @@ Task(subagent_type="general_purpose_task",
 ⚠️ 失败: {failed} 个
 📊 可视化: viz.html (已自动更新)
 ```
-> okf_writer 每次写入后会自动重新生成 viz.html，无需手动触发。
+> 批量模式下 viz.html 只在所有文档写入完成后生成一次。
 
 ### Step B6: Commit to Git
 - Run `git add bundle/` and `git commit -m "docs: batch scan {total} documents to OKF Bundle"`.
@@ -441,8 +454,9 @@ When user asks for a specific type (e.g., "给我所有会议纪要"):
 1. **主对话**：对每篇变更文档，调 `python scripts/scanner.py --doc "<url>"` 拉取内容。
 2. **主对话**：启动 subagent 对所有变更文档批量分类（同 Workflow B Step B2 的 Task 调用方式）。
 3. **主对话**：按验收清单（同 A3）逐篇验收，不通过的打回 subagent 重做。
-4. **主对话**：验收通过后，用 `--classified-file` + `--content-file` 调 okf_writer 写入。
+4. **主对话**：验收通过后，组装 `_batch.json` 用 `--batch-file` 批量写入（同 Workflow B Step B4）。
    - People/Concept/entities 自动 upsert，保留 `# Profile` / `# Definition` 区段。
+   - viz.html 只在所有文档写入完成后生成一次。
 
 ### Step D3: Finalize (主对话)
 - Run `python scripts/auto_sync.py finalize --commit`.
@@ -456,7 +470,7 @@ When user asks for a specific type (e.g., "给我所有会议纪要"):
 📊 可视化: viz.html (已自动更新)
 ⏭️  下次自动跳过未变更文档
 ```
-> okf_writer 每次写入后会自动重新生成 viz.html，无需手动触发。
+> 批量模式下 viz.html 只在所有文档写入完成后生成一次。
 
 **幂等保证:** 同一 `resource`（doc_token）重跑不会产生重复条目；人工编辑过的 `# Profile` / `# Definition` 区段不会被覆盖。
 

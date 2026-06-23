@@ -271,11 +271,11 @@ DATA.edges.forEach(e => {
   degree[e.target] = (degree[e.target]||0) + 1;
 });
 
-// Build enriched two-line label: "Title \n · subtitle"
+// Build enriched two-line label: Title + subtitle (newline via JS template literal)
 // subtitle prefers tags[0..1], falls back to date(timestamp) or project.
 function _shortDate(ts){
   if(!ts) return "";
-  const m = String(ts).match(/^(\d{4}-\d{2}-\d{2})/);
+  const m = String(ts).match(/^(\\d{4}-\\d{2}-\\d{2})/);
   return m ? m[1] : "";
 }
 function _subtitle(n){

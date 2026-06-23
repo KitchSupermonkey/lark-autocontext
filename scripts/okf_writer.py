@@ -592,7 +592,7 @@ def _check_subagent_signature(classified_data):
         )
 
 
-def write_okf_document(classified_data, raw_content=""):
+def write_okf_document(classified_data, raw_content="", skip_visualize=False):
     """
     Write an OKF-compliant Markdown file to the Bundle.
 
@@ -600,6 +600,8 @@ def write_okf_document(classified_data, raw_content=""):
         classified_data: Dict with project, type, title, tags, etc.
             Must contain `_classified_by: "subagent"` per SKILL.md 铁律 1.
         raw_content: Original document content from Scanner
+        skip_visualize: If True, skip auto-viz (for batch mode — caller
+            should call _auto_visualize() once after all writes).
 
     Returns:
         Dict with file_path and action (created/updated)
@@ -703,7 +705,8 @@ def write_okf_document(classified_data, raw_content=""):
 
     # Auto-generate viz.html so the user always has a fresh visual output
     # after each write. Non-blocking: failures are logged but don't break the write.
-    viz_path = _auto_visualize(bundle_path)
+    # In batch mode (skip_visualize=True), caller handles viz generation once at end.
+    viz_path = None if skip_visualize else _auto_visualize(bundle_path)
 
     return {
         "action": action,
@@ -718,11 +721,14 @@ def main():
     """Entry point with multiple input modes (to avoid shell quoting issues).
 
     Modes (in priority order):
-      1. --classified-file <path> [--content-file <path>]
-         Read classified JSON (and optional raw content) from files.
-      2. --stdin
+      1. --batch-file <path> [--no-visualize]
+         Batch mode: read JSON array of [{classified, raw_content}, ...].
+         Writes all docs, generates viz.html ONCE at end (unless --no-visualize).
+      2. --classified-file <path> [--content-file <path>] [--no-visualize]
+         Single doc mode: read classified JSON (and optional raw content) from files.
+      3. --stdin
          Read JSON object from stdin: {"classified": {...}, "raw_content": "..."}
-      3. <classified_json> [<raw_content>]
+      4. <classified_json> [<raw_content>]
          Legacy positional args (kept for backward compatibility).
     """
     import argparse
@@ -730,8 +736,12 @@ def main():
         description="OKF Writer: generate OKF Markdown from classified data.",
         add_help=False,
     )
+    parser.add_argument("--batch-file",
+                        help="Batch mode: path to JSON array of {classified, raw_content} objects")
     parser.add_argument("--classified-file", help="Path to a JSON file with classified data")
     parser.add_argument("--content-file", help="Path to a text file with raw content")
+    parser.add_argument("--no-visualize", action="store_true",
+                        help="Skip auto viz.html generation (useful in batch mode)")
     parser.add_argument("--stdin", action="store_true",
                         help='Read {"classified":{...},"raw_content":"..."} from stdin')
     parser.add_argument("-h", "--help", action="store_true")
@@ -741,15 +751,55 @@ def main():
     if args.help:
         print(
             "Usage:\n"
+            "  python okf_writer.py --batch-file batch.json [--no-visualize]\n"
             "  python okf_writer.py --classified-file classified.json [--content-file body.md]\n"
             "  cat payload.json | python okf_writer.py --stdin\n"
             "  python okf_writer.py '<classified_json>' [raw_content]   # legacy\n"
+            "\n"
+            "batch.json format:\n"
+            '  [{"classified": {...}, "raw_content": "..."}, ...]\n'
             "\n"
             "classified_json example:\n"
             '  {"project":"my-project","type":"Meeting Minutes","title":"周会","tags":["会议"]}'
         )
         sys.exit(0)
 
+    # === Batch mode ===
+    if args.batch_file:
+        with open(args.batch_file, "r", encoding="utf-8") as f:
+            items = json.load(f)
+        if not isinstance(items, list):
+            print("Error: --batch-file expects a JSON array", file=sys.stderr)
+            sys.exit(1)
+
+        results = []
+        bundle_path = get_bundle_path()
+        for i, item in enumerate(items):
+            classified = item.get("classified") or item
+            raw = item.get("raw_content", "")
+            # Support content_file reference (read file content)
+            if not raw and item.get("content_file"):
+                with open(item["content_file"], "r", encoding="utf-8") as cf:
+                    raw = cf.read()
+            r = write_okf_document(classified, raw, skip_visualize=True)
+            results.append(r)
+            print(f"[batch {i+1}/{len(items)}] {r.get('action','?')}: "
+                  f"{r.get('title','?')} -> {r.get('file_path','?')}")
+
+        # Generate viz.html ONCE after all writes (unless --no-visualize)
+        viz_path = None
+        if not args.no_visualize:
+            print(f"[batch] generating viz.html for {len(results)} documents...")
+            viz_path = _auto_visualize(bundle_path)
+
+        print(json.dumps({
+            "batch_count": len(results),
+            "results": results,
+            "viz_html": viz_path,
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # === Single doc mode ===
     classified_data = None
     raw_content = ""
 
@@ -770,7 +820,8 @@ def main():
         print("Error: missing input. Run with --help for usage.", file=sys.stderr)
         sys.exit(1)
 
-    result = write_okf_document(classified_data, raw_content)
+    result = write_okf_document(classified_data, raw_content,
+                                skip_visualize=args.no_visualize)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
