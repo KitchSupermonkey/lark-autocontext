@@ -164,22 +164,22 @@ def create_scan_config(auto=False, sources=None):
     if sources is None:
         sources = []
         print("  现在可以添加要扫描的飞书文件夹/Wiki。")
-        print("  直接粘贴飞书 URL（例如 https://xxx.feishu.cn/drive/folder/XXX）")
+        print("  直接粘贴飞书链接（例如 https://xxx.feishu.cn/drive/folder/XXX）")
         print("  输入空行结束添加\n")
 
         while True:
-            url = input("  飞书 URL (空行结束): ").strip()
+            url = input("  飞书链接 (空行结束): ").strip()
             if not url:
                 break
             src_type, token = extract_token_from_url(url)
             if not token:
-                warn(f"无法识别 URL 中的 token，跳过: {url}")
+                warn(f"无法识别这个飞书链接，跳过: {url}")
                 continue
             name = input(f"  给这个源起个名字 (默认: {src_type}): ").strip()
             if not name:
                 name = src_type
             sources.append({"type": src_type, "token": token, "name": name})
-            ok(f"已添加: {name} ({src_type}, token={token[:8]}...)")
+            ok(f"已添加: {name} ({src_type})")
 
     config = {"sources": sources}
     with open(scan_config_path, "w", encoding="utf-8") as f:

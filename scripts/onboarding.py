@@ -66,7 +66,7 @@ def check_status(quiet=False):
             print(f"✅ 扫描配置: {len(sources)} 个数据源")
         else:
             print("⚠️  扫描配置: 不存在 (单文档保存仍可用，批量扫描需要配置)")
-            print("   → 从 scan_config.json.example 复制并填写飞书 token")
+            print("   → 运行 python scripts/setup.py，粘贴飞书链接即可自动配置")
 
     # Check 4: lark-cli auth
     if not quiet:

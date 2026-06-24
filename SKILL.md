@@ -22,7 +22,7 @@ description: |
    - Do NOT proceed until authenticated.
 
 3. **Check config.json exists:** Verify `scripts/config.json` exists.
-   - If missing → Guide user to copy from `config.json.example` and fill in tokens.
+   - If missing → Run `python scripts/setup.py` (auto-creates config, no manual editing needed).
 
 4. **Check bundle initialized:** Verify `bundle/index.md` exists.
    - If missing → Run `python scripts/init_bundle.py` first.
@@ -166,10 +166,10 @@ Show the user this onboarding card **before any other action**:
 > **setup.py 会自动完成：**
 > 1. 检查 lark-cli 安装状态和飞书登录状态
 > 2. 从 example 复制 config.json（无需手动填 token，认证通过 lark-cli 完成）
-> 3. 交互式创建 scan_config.json（用户粘贴飞书文件夹/wiki URL，脚本自动提取 token）
+> 3. 交互式创建 scan_config.json（用户粘贴飞书文件夹/wiki 链接，脚本自动识别）
 > 4. 初始化 OKF Bundle 目录结构
 >
-> **用户不需要手动编辑任何 JSON 文件。**
+> **用户不需要手动编辑任何 JSON 文件，也不需要知道什么是 token。**
 
 **If lark-cli not installed:**
 ```
@@ -215,7 +215,7 @@ This skill guides the agent to extract, classify, and store business context fro
 ## 🔧 Configuration
 
 Scripts automatically load `scripts/config.json` for bundle path and optional Feishu config.
-Batch scanning requires `scripts/scan_config.json` (copy from `scan_config.json.example`).
+Batch scanning requires `scripts/scan_config.json` (created automatically by `setup.py` when user pastes Feishu links).
 
 **First-time Setup (Auto-detected):**
 - If `config.json` is missing → trigger the **Quick Start** onboarding flow above.
@@ -678,7 +678,7 @@ bundle/
 | 跳过 scanner 直接调 lark-cli | 拿到的内容未经 clean_feishu_content 清理，HTML 混 Markdown | 用 `scanner.py --doc` 或 `--batch` |
 | 不读文档内容就分类 | people/key_points/decisions 全是空的，图谱无意义 | Agent 必须完整读取 scanner 输出再分类 |
 | 用位置参数传长 JSON 给 okf_writer | 命令行长度限制 + 转义地狱，必然出错 | 用 `--classified-file` + `--content-file` |
-| 不配 scan_config.json 就跑 | 里面还是占位符，scanner 会卡死或报错 | 先从 `.example` 复制并填写真实 token |
+| 不配 scan_config.json 就跑 | 里面还是占位符，scanner 会卡死或报错 | 运行 `setup.py`，粘贴飞书链接自动配置 |
 
 ### 技术注意事项
 
@@ -698,7 +698,7 @@ bundle/
 | 首次使用 / 没有 config.json | 运行 `python scripts/init_bundle.py` 自动创建 Bundle |
 | Bundle 未初始化 | 运行 `python scripts/init_bundle.py` |
 | Token 过期 / 认证失败 | 运行 `lark-cli auth login --recommend --no-wait` 重新登录 |
-| 扫描配置缺失 | 从 `scan_config.json.example` 复制并填写飞书 token |
+| 扫描配置缺失 | 运行 `python scripts/setup.py`，粘贴飞书链接自动配置 |
 | 查询无结果 | 先保存文档或运行批量扫描 |
 | 提取失败 | 检查文档链接格式是否正确（应为 feishu.cn/docx/xxx） |
 
