@@ -47,7 +47,7 @@ Agent：✅ 已生成 viz.html，浏览器打开可看到文档关系图
 **把 GitHub 地址发给 Agent，让它自己装：**
 
 ```
-https://github.com/KitchSupermonkey/lark-autocontext
+https://github.com/IAMSUPERMONKEY/lark-autocontext
 ```
 
 Agent 会 clone 仓库、读取 `SKILL.md`，即可按用户指令操作飞书文档——保存、扫描、同步、查询。
@@ -114,7 +114,7 @@ ls bundle/index.md
 ### Step 1: Clone & Setup
 
 ```bash
-git clone https://github.com/KitchSupermonkey/lark-autocontext.git
+git clone https://github.com/IAMSUPERMONKEY/lark-autocontext.git
 cd lark-autocontext
 pip install -r requirements.txt
 cp scripts/config.json.example scripts/config.json
